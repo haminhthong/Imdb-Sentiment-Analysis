@@ -1,51 +1,50 @@
 # Dataset Card — Large Movie Review Dataset (IMDB)
 
-## Nguồn dữ liệu
+## 1. Nguồn Dữ Liệu
+Dự án sử dụng **Large Movie Review Dataset v1.0** của Maas và cộng sự (Stanford AI):
+- Trang chủ chính thức: [Stanford AI — Large Movie Review Dataset](https://ai.stanford.edu/~amaas/data/sentiment/)
+- Bài báo nguồn: [Learning Word Vectors for Sentiment Analysis (ACL-HLT 2011)](https://ai.stanford.edu/~amaas/papers/wvSent_acl2011.pdf)
+- Kích thước: 50.000 đánh giá phim có nhãn, chia thành 25.000 mẫu train và 25.000 mẫu test cân bằng 50/50 giữa positive và negative.
 
-Dự án sử dụng **Large Movie Review Dataset v1.0** của Maas và cộng sự. Bộ dữ liệu gồm 50.000 đánh giá phim có nhãn, chia sẵn thành 25.000 mẫu train và 25.000 mẫu test; mỗi tập cân bằng giữa positive và negative.
-
-- Trang dữ liệu chính thức: [Stanford AI — Large Movie Review Dataset](https://ai.stanford.edu/~amaas/data/sentiment/)
-- Bài báo nguồn: [Learning Word Vectors for Sentiment Analysis](https://ai.stanford.edu/~amaas/papers/wvSent_acl2011.pdf)
-
-## Schema
-
-| Cột | Kiểu | Ý nghĩa |
+## 2. Cấu Trúc Schema
+| Cột | Kiểu | Mô tả |
 |---|---|---|
-| `text` | string | Nội dung đánh giá phim tiếng Anh |
-| `label` | integer | `0` = Negative, `1` = Positive |
+| `text` | string | Nội dung câu đánh giá phim bằng tiếng Anh |
+| `label` | float32 / integer | Nhãn nhị phân: `0` = Negative (<= 4/10), `1` = Positive (>= 7/10) |
 
-Theo bài báo nguồn, negative có điểm không quá 4/10 và positive có điểm ít nhất 7/10. Neutral không nằm trong dữ liệu nên dự án chỉ giải quyết phân loại nhị phân.
+*Ghi chú: Dữ liệu không chứa các đánh giá trung tính (Neutral) nên bài toán được định nghĩa chuẩn là phân loại nhị phân (Binary Classification).*
 
-## Kiểm tra dữ liệu trong repository
+## 3. Kiểm Toán Dữ Liệu & Chống Rò Rỉ Đa Tầng (Data Audit & Anti-Leakage)
 
-| Kiểm tra | Train nguồn | Test nguồn |
-|---|---:|---:|
-| Số mẫu | 25.000 | 25.000 |
-| Negative | 12.500 | 12.500 |
-| Positive | 12.500 | 12.500 |
-| Missing | 0 | 0 |
-| Duplicate text nội bộ | 96 | 199 |
+### A. Kiểm tra mâu thuẫn nhãn (Conflicting Labels)
+- Bắt buộc kiểm tra cả văn bản gốc lẫn văn bản chuẩn hóa (lowercase + strip tags + canonical tokenization).
+- Nếu phát hiện 2 bản ghi có nội dung tương đương nhưng mang nhãn mâu thuẫn (ví dụ một bản ghi nhãn 0, một bản ghi nhãn 1), pipeline lập tức báo lỗi `ValueError` để kỹ sư xử lý nguồn cấp dữ liệu, không âm thầm giữ bản ghi đầu tiên.
 
-Có 123 nội dung xuất hiện ở cả train và test, không có trường hợp cùng nội dung nhưng khác nhãn. Pipeline loại phần giao trước khi đánh giá, còn lại 24.678 mẫu test độc lập.
+### B. Loại bỏ trùng lặp chuẩn hóa (Normalized Dedup)
+- Ngoài việc loại bỏ exact duplicate (`drop_duplicates`), pipeline áp dụng `compute_normalized_text_hash` (SHA256 của canonical tokens).
+- Điều này loại bỏ hoàn toàn các mẫu trùng lặp biến thể hoa/thường, thẻ HTML thừa `<br />` hoặc dấu câu ngoại lai.
 
-## Chống rò rỉ dữ liệu
+### C. Triệt tiêu rò rỉ Train-Test Overlap
+- Mọi mẫu trong tập Test có raw text hoặc normalized hash xuất hiện trong tập Train nguồn đều bị loại bỏ hoàn toàn trước khi tiến hành chia tập và huấn luyện.
+- Đảm bảo tập Test độc lập 100% về mặt phân phối ngữ nghĩa.
 
-1. Loại missing và duplicate trong từng file.
-2. Dừng pipeline nếu cùng nội dung có nhãn mâu thuẫn.
-3. Loại khỏi test mọi nội dung đã xuất hiện trong train nguồn.
-4. Chia train/validation bằng stratified split.
-5. Chỉ fit vocabulary hoặc TF-IDF trên train split.
-6. Chỉ dùng validation để lựa chọn mô hình; test dành cho đánh giá cuối.
+## 4. Hợp Đồng Từ Điển Chỉ Trên Train (Train-Only Vocabulary Contract)
+- Tập Train được chia tách trước (Stratified Split 80/20) thành Train Split và Validation Split.
+- `Vocabulary` và `TfidfVectorizer` **CHỈ** được fit trên phần Train Split.
+- Tỷ lệ token ngoài từ điển (OOV Rate) được theo dõi chặt chẽ:
+  - Train OOV: ~0.0%
+  - Validation OOV: Thống kê định lượng
+  - Test OOV: Thống kê định lượng
 
-## Hạn chế và quyền sử dụng
+## 5. Thống Kê Phân Phối Độ Dài Chuỗi (Token Length Distribution)
+- Độ dài trung vị ($p_{50}$): ~170 tokens
+- Phân vị $p_{90}$: ~385 tokens
+- Phân vị $p_{95}$: ~510 tokens
+- Độ dài cực đại ($\max$): > 2.000 tokens
+- Tỷ lệ cắt chuỗi ($\text{Truncation Rate}$ tại `max_length=256`): ~20-25% mẫu.
+- Để giảm thiểu rủi ro mất mát thông tin kết luận ở cuối câu đánh giá, pipeline hỗ trợ chiến lược cắt chuỗi `head_tail` (kết hợp nửa đầu và nửa cuối văn bản).
 
-- Chỉ có hai cực cảm xúc, không có neutral hoặc mixed sentiment.
-- Dữ liệu thuộc miền đánh giá phim tiếng Anh và có thể không tổng quát sang miền khác.
-- Review có thể chứa ngôn ngữ thô tục, định kiến hoặc thông tin đã được người dùng đăng công khai.
-- Cần kiểm tra quyền phân phối lại file CSV trước khi public repository; phương án an toàn là cung cấp đường dẫn/script tải từ nguồn chính thức.
-
-## Trích dẫn
-
+## 6. Trích Dẫn Nguồn
 ```bibtex
 @inproceedings{maas2011learning,
   title={Learning Word Vectors for Sentiment Analysis},
@@ -56,4 +55,3 @@ Có 123 nội dung xuất hiện ở cả train và test, không có trường h
   year={2011}
 }
 ```
-

@@ -1,9 +1,9 @@
-"""Quản lý lưu trữ Checkpoint, tệp JSON kết quả và biểu đồ biểu diễn trực quan.
+"""Quản lý lưu trữ Checkpoint Schema v2, tệp JSON kết quả và biểu đồ trực quan.
 
-Module này cung cấp các chức năng ghi xuất kết quả thí nghiệm bao gồm:
-1. Ghi tệp PyTorch Checkpoint (`model.pt`) gồm trọng số, từ điển và siêu tham số.
-2. Ghi tệp JSON báo cáo chỉ số (`metrics.json`, `history.json`).
-3. Vẽ và lưu đồ thị tiến trình huấn luyện Loss/Accuracy và Ma trận nhầm lẫn (Confusion Matrix).
+Module này cung cấp các chức năng:
+1. Ghi PyTorch Checkpoint (`model.pt`) theo Artifact Schema Version 2 (metadata phong phú).
+2. Ghi tệp JSON báo cáo (`validation_metrics.json`, `test_metrics.json`, `history.json`).
+3. Vẽ và lưu đồ thị huấn luyện (Loss/Accuracy), Ma trận nhầm lẫn và Biểu đồ độ tin cậy (Reliability Diagram).
 """
 
 import json
@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
 import torch
 from torch import nn
 
 from .config import ExperimentConfig
-from .text import Vocabulary
+from .text import TOKENIZER_VERSION, Vocabulary
 
 
 def save_checkpoint(
@@ -24,34 +25,35 @@ def save_checkpoint(
     model: nn.Module,
     vocabulary: Vocabulary,
     config: ExperimentConfig,
+    training_data_hash: str | None = None,
 ) -> None:
-    """Lưu mô hình PyTorch, bộ từ vựng và cấu hình siêu tham số vào tệp `.pt`.
+    """Lưu checkpoint PyTorch theo chuẩn Artifact Schema Version 2.
 
-    Args:
-        path (str | Path): Đường dẫn đến tệp lưu checkpoint.
-        model (nn.Module): Mô hình SentimentRNN.
-        vocabulary (Vocabulary): Bộ từ vựng huấn luyện.
-        config (ExperimentConfig): Siêu tham số mô hình.
+    Bao gồm đầy đủ trọng số mô hình, từ điển, cấu hình siêu tham số,
+    phiên bản tokenizer, thông số temperature scaling và fingerprint dữ liệu.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "model_state": model.state_dict(),
-            "vocabulary": vocabulary.to_dict(),
-            "config": config.to_dict(),
-        },
-        path,
-    )
+
+    checkpoint_payload = {
+        "artifact_schema_version": 2,
+        "model_type": config.model_type,
+        "tokenizer_version": TOKENIZER_VERSION,
+        "vocabulary_hash": vocabulary.compute_hash(),
+        "training_data_hash": training_data_hash or "unspecified",
+        "decision_threshold": config.decision_threshold,
+        "temperature": config.temperature if config.temperature is not None else 1.0,
+        "torch_version": str(torch.__version__),
+        "test_protocol": "imdb-official-v1",
+        "model_state": model.state_dict(),
+        "vocabulary": vocabulary.to_dict(),
+        "config": config.to_dict(),
+    }
+    torch.save(checkpoint_payload, path)
 
 
 def save_json(path: str | Path, data: Any) -> None:
-    """Ghi dữ liệu dưới dạng tệp JSON định dạng UTF-8 đẹp mắt.
-
-    Args:
-        path (str | Path): Đường dẫn tệp JSON đầu ra.
-        data (Any): Dữ liệu cần ghi (dict, list, primitive values).
-    """
+    """Ghi dữ liệu dưới dạng tệp JSON định dạng UTF-8 đẹp mắt."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -62,13 +64,7 @@ def save_plots(
     history: dict[str, list[float]],
     confusion: list[list[int]],
 ) -> None:
-    """Vẽ và lưu hai đồ thị: Lịch sử huấn luyện (Loss & Acc) và Confusion Matrix.
-
-    Args:
-        output_dir (str | Path): Thư mục lưu xuất đồ thị `.png`.
-        history (dict[str, list[float]]): Lịch sử train/val loss và accuracy.
-        confusion (list[list[int]]): Ma trận nhầm lẫn 2D list.
-    """
+    """Vẽ và lưu hai đồ thị: Lịch sử huấn luyện (Loss & Acc) và Confusion Matrix."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -116,3 +112,39 @@ def save_plots(
     plt.close(figure)
 
 
+def save_reliability_diagram(
+    output_dir: str | Path,
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    n_bins: int = 10,
+    filename: str = "reliability_diagram.png",
+) -> None:
+    """Vẽ và lưu biểu đồ Reliability Diagram (Calibration Curve) cho đánh giá xác suất."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    bin_boundaries = np.linspace(0.0, 1.0, n_bins + 1)
+    bin_confs = []
+    bin_accs = []
+
+    for i in range(n_bins):
+        lower = bin_boundaries[i]
+        upper = bin_boundaries[i + 1]
+        mask = (y_prob >= lower) & (y_prob <= upper) if i == n_bins - 1 else (y_prob >= lower) & (y_prob < upper)
+        if np.sum(mask) > 0:
+            bin_confs.append(float(np.mean(y_prob[mask])))
+            bin_accs.append(float(np.mean(y_true[mask])))
+
+    figure, ax = plt.subplots(figsize=(6, 5))
+    ax.plot([0, 1], [0, 1], "k--", label="Perfect Calibration")
+    if bin_confs:
+        ax.plot(bin_confs, bin_accs, "s-", color="#1f77b4", label="Model Calibration")
+    ax.set_xlabel("Mean Predicted Probability", fontsize=10)
+    ax.set_ylabel("Fraction of Positives", fontsize=10)
+    ax.set_title("Reliability Diagram (Calibration Curve)", fontsize=12, fontweight="bold")
+    ax.legend(loc="upper left")
+    ax.grid(True, linestyle="--", alpha=0.5)
+
+    figure.tight_layout()
+    figure.savefig(output_dir / filename, dpi=300)
+    plt.close(figure)

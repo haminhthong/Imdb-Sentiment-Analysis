@@ -1,11 +1,10 @@
 """REST API phục vụ phân loại cảm xúc bằng FastAPI và PyTorch.
 
-Cung cấp các endpoints chính:
-- `GET /health`: Kiểm tra trạng thái hệ thống.
-- `GET /ready`: Kiểm tra khả năng phục vụ và checkpoint mô hình.
-- `GET /info`: Lấy thông tin chi tiết cấu hình và số tham số của mô hình đang nạp.
-- `POST /predict`: Dự đoán cảm xúc của một câu đánh giá đơn lẻ.
-- `POST /predict/batch`: Dự đoán cảm xúc danh sách câu theo lô.
+Được thiết kế theo định hướng kỹ thuật chuẩn mực (Production-Oriented NLP Portfolio System):
+- Endpoints chuẩn: `/health`, `/ready`, `/metrics`, `/info`, `/predict`, `/predict/batch`.
+- Schema Version 2: Tách bạch giữa calibrated `positive_probability` và raw `positive_score`.
+- Decision policy: Cung cấp nhãn `decision` ('accepted' / 'review_required') và cờ `uncertain`.
+- Reliability warnings: Trả về metadata số token, tỷ lệ OOV, cờ cắt chuỗi và cảnh báo ngôn ngữ.
 """
 
 import os
@@ -36,10 +35,10 @@ REQUEST_TIMESTAMPS: dict[str, deque[float]] = defaultdict(deque)
 app = FastAPI(
     title=APP_NAME,
     description=(
-        "REST API hiệu năng cao phân loại cảm xúc đánh giá phim tiếng Anh "
-        "sử dụng các mô hình PyTorch Recurrent Neural Network (LSTM, GRU, BiLSTM)."
+        "REST API phục vụ phân loại cảm xúc đánh giá phim tiếng Anh "
+        "dưới kiến trúc production-oriented NLP portfolio system với xác suất hiệu chuẩn và kiểm toán đầu vào."
     ),
-    version="1.0.0",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -73,13 +72,21 @@ class BatchPredictionRequest(BaseModel):
 
 
 class PredictionResponse(BaseModel):
-    """Schema kết quả dự đoán cảm xúc."""
+    """Schema kết quả dự đoán cảm xúc đã hiệu chuẩn và báo cáo kiểm toán."""
 
     label: str = Field(description="Nhãn dự đoán: 'Positive' hoặc 'Negative'.")
     positive_probability: float = Field(
-        description="Xác suất thuộc lớp Positive (0.0 -> 1.0)."
+        description="Xác suất thuộc lớp Positive đã qua Temperature Scaling hiệu chuẩn."
     )
     confidence: float = Field(description="Độ tin cậy của dự đoán (max(p, 1-p)).")
+    positive_score: float = Field(description="Điểm sigmoid thô chưa qua hiệu chuẩn.")
+    decision: str = Field(description="Quyết định hệ thống: 'accepted' hoặc 'review_required'.")
+    uncertain: bool = Field(description="Cờ báo hiệu dự đoán rơi vào vùng bất định.")
+    input_tokens: int = Field(description="Tổng số token của văn bản gốc.")
+    used_tokens: int = Field(description="Số token thực tế được đưa vào mô hình.")
+    truncated: bool = Field(description="Cờ đánh dấu văn bản bị cắt do vượt max_length.")
+    oov_rate: float = Field(description="Tỷ lệ token ngoài từ điển (OOV).")
+    warnings: list[str] = Field(default_factory=list, description="Danh sách cảnh báo độ tin cậy.")
 
 
 class ModelInfoResponse(BaseModel):
@@ -89,16 +96,14 @@ class ModelInfoResponse(BaseModel):
     total_parameters: int
     vocabulary_size: int
     max_length: int
+    temperature: float
+    decision_threshold: float
     checkpoint_path: str
 
 
 @lru_cache(maxsize=1)
 def get_predictor() -> SentimentPredictor:
-    """Nạp trọng số mô hình vào RAM một lần duy nhất (Singleton Pattern).
-
-    Returns:
-        SentimentPredictor: Đối tượng suy luận đã nạp mô hình.
-    """
+    """Nạp trọng số mô hình vào RAM một lần duy nhất (Singleton Pattern)."""
     return SentimentPredictor(CHECKPOINT_PATH, device="cpu")
 
 
@@ -193,6 +198,7 @@ def readiness() -> dict[str, Any]:
     return {
         "status": "ready",
         "model_type": predictor.config.model_type,
+        "temperature": predictor.temperature,
         "checkpoint": str(predictor.checkpoint_path),
     }
 
@@ -204,13 +210,15 @@ def readiness() -> dict[str, Any]:
     summary="Lấy thông tin cấu hình mô hình",
 )
 def model_info() -> dict[str, Any]:
-    """Lấy thông tin siêu tham số và số lượng tham số mô hình."""
+    """Lấy thông tin siêu tham số, nhiệt độ hiệu chuẩn và số tham số mô hình."""
     predictor = get_ready_predictor()
     return {
         "model_type": predictor.config.model_type,
         "total_parameters": predictor.model.count_parameters(),
         "vocabulary_size": len(predictor.vocabulary),
         "max_length": predictor.config.max_length,
+        "temperature": predictor.temperature,
+        "decision_threshold": predictor.decision_threshold,
         "checkpoint_path": str(predictor.checkpoint_path),
     }
 
@@ -223,7 +231,12 @@ def model_info() -> dict[str, Any]:
     dependencies=[Depends(verify_api_key), Depends(enforce_rate_limit)],
 )
 def predict(request: PredictionRequest) -> dict[str, Any]:
-    """Dự đoán cảm xúc cho một câu đánh giá phim duy nhất."""
+    """Dự đoán cảm xúc cho một câu đánh giá phim kèm độ tin cậy và kiểm toán."""
+    if not request.text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="EMPTY_TEXT: Nội dung đánh giá không được để trống hoặc toàn khoảng trắng.",
+        )
     try:
         result = get_ready_predictor().predict(request.text)
         return result.to_dict()
@@ -243,6 +256,11 @@ def predict(request: PredictionRequest) -> dict[str, Any]:
 )
 def predict_batch(request: BatchPredictionRequest) -> list[dict[str, Any]]:
     """Dự đoán cảm xúc theo lô cho danh sách nhiều câu đánh giá."""
+    if any(not text.strip() for text in request.texts):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="EMPTY_TEXT: Mỗi mẫu đánh giá trong batch phải là chuỗi không rỗng.",
+        )
     try:
         results = get_ready_predictor().predict_batch(request.texts)
         return [res.to_dict() for res in results]
