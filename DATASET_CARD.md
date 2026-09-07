@@ -20,21 +20,25 @@ Dự án sử dụng **Large Movie Review Dataset v1.0** của Maas và cộng s
 - Bắt buộc kiểm tra cả văn bản gốc lẫn văn bản chuẩn hóa (lowercase + strip tags + canonical tokenization).
 - Nếu phát hiện 2 bản ghi có nội dung tương đương nhưng mang nhãn mâu thuẫn (ví dụ một bản ghi nhãn 0, một bản ghi nhãn 1), pipeline lập tức báo lỗi `ValueError` để kỹ sư xử lý nguồn cấp dữ liệu, không âm thầm giữ bản ghi đầu tiên.
 
-### B. Loại bỏ trùng lặp chuẩn hóa (Normalized Dedup)
+### B. Trùng lặp chuẩn hóa (Normalized Exact Dedup)
 - Ngoài việc loại bỏ exact duplicate (`drop_duplicates`), pipeline áp dụng `compute_normalized_text_hash` (SHA256 của canonical tokens).
-- Điều này loại bỏ hoàn toàn các mẫu trùng lặp biến thể hoa/thường, thẻ HTML thừa `<br />` hoặc dấu câu ngoại lai.
+- Đây là **normalized exact duplicate**, loại các biến thể hoa/thường, thẻ HTML
+  thừa `<br />` hoặc dấu câu ngoại lai. Nó không phải semantic near-duplicate.
 
-### C. Triệt tiêu rò rỉ Train-Test Overlap
-- Mọi mẫu trong tập Test có raw text hoặc normalized hash xuất hiện trong tập Train nguồn đều bị loại bỏ hoàn toàn trước khi tiến hành chia tập và huấn luyện.
-- Đảm bảo tập Test độc lập 100% về mặt phân phối ngữ nghĩa.
+### C. Audit Train-Test Overlap
+- Official Test được giữ nguyên. Pipeline chỉ so raw exact hash và normalized
+  exact hash với Official Train; nếu overlap > 0 thì audit fail-fast.
+- Không tự động xóa mẫu rồi vẫn gọi phần còn lại là Official Test.
 
 ## 4. Hợp Đồng Từ Điển Chỉ Trên Train (Train-Only Vocabulary Contract)
-- Tập Train được chia tách trước (Stratified Split 80/20) thành Train Split và Validation Split.
-- `Vocabulary` và `TfidfVectorizer` **CHỈ** được fit trên phần Train Split.
+- Official Train được chia stratified thành Train 20.000, Validation 2.500 và
+  Calibration 2.500 (với bộ IMDB 25.000 mẫu).
+- `Vocabulary` và `TfidfVectorizer` development **CHỈ** được fit trên Train;
+  final vocabulary được fit trên Train + Validation sau khi architecture freeze.
 - Tỷ lệ token ngoài từ điển (OOV Rate) được theo dõi chặt chẽ:
   - Train OOV: ~0.0%
   - Validation OOV: Thống kê định lượng
-  - Test OOV: Thống kê định lượng
+  - Calibration OOV: Thống kê định lượng
 
 ## 5. Thống Kê Phân Phối Độ Dài Chuỗi (Token Length Distribution)
 - Độ dài trung vị ($p_{50}$): ~170 tokens

@@ -1,14 +1,13 @@
-"""Kỹ thuật hiệu chuẩn xác suất (Probability Calibration) và chính sách quyết định (Decision Policy).
+"""Hiệu chuẩn xác suất và selective classification.
 
 Module này cung cấp:
-1. TemperatureScaler: Tối ưu hóa tham số nhiệt độ T > 0 trên Validation Logits để
-   chuẩn hóa phân phối xác suất đầu ra (chống Overconfidence).
+1. TemperatureScaler: Tối ưu hóa T > 0 trên Calibration Logits.
 2. Các chỉ số đo lường hiệu chuẩn:
    - Expected Calibration Error (ECE)
    - Brier Score
    - Negative Log-Likelihood (Log Loss)
-3. DecisionPolicy: Xác định nhãn, độ tin cậy và vùng bất định (Uncertainty Band)
-   cho phép gắn cờ các trường hợp cần con người rà soát (Human-in-the-loop review).
+3. DecisionPolicy: xác định nhãn theo ngưỡng 0.5 và chấp nhận dự đoán khi
+   ``confidence >= confidence_threshold``.
 """
 
 from dataclasses import dataclass
@@ -82,7 +81,7 @@ def compute_ece(y_true: np.ndarray, y_prob: np.ndarray, n_bins: int = 10) -> flo
 class TemperatureScaler:
     """Hiệu chuẩn logits bằng một tham số vô hướng nhiệt độ T > 0 (Temperature Scaling).
 
-    Hàm tối ưu hóa: tìm T > 0 sao cho NLL (Negative Log-Likelihood) trên tập Validation nhỏ nhất:
+    Hàm tối ưu hóa: tìm T > 0 sao cho NLL trên tập Calibration nhỏ nhất:
         min_T BCEWithLogitsLoss(logits / T, labels)
     """
 
@@ -90,11 +89,11 @@ class TemperatureScaler:
         self.temperature = max(1e-4, float(temperature))
 
     def fit(self, logits: torch.Tensor | np.ndarray, labels: torch.Tensor | np.ndarray) -> float:
-        """Học tham số nhiệt độ T CHỈ từ logits và labels của tập Validation.
+        """Học T chỉ từ logits và labels của Calibration Set.
 
         Args:
-            logits: Logits thô của mô hình trên tập validation.
-            labels: Nhãn thực tế {0, 1} của tập validation.
+            logits: Logits thô của mô hình trên Calibration Set.
+            labels: Nhãn thực tế {0, 1} của Calibration Set.
 
         Returns:
             float: Tham số nhiệt độ T tối ưu sau khi fit.
@@ -146,27 +145,95 @@ class DecisionResult:
 
 
 class DecisionPolicy:
-    """Chính sách quyết định dựa trên ngưỡng và vùng bất định."""
+    """Chính sách abstention dựa trên confidence, không dùng band xác suất."""
 
     def __init__(
         self,
         threshold: float = 0.5,
-        uncertain_band: tuple[float, float] = (0.40, 0.60),
+        confidence_threshold: float = 0.6,
+        uncertain_band: tuple[float, float] | None = None,
     ) -> None:
         self.threshold = float(threshold)
-        self.uncertain_lower = float(uncertain_band[0])
-        self.uncertain_upper = float(uncertain_band[1])
+        # ``uncertain_band`` chỉ là compatibility với artifact v2. Band 0.40-0.60
+        # tương đương confidence threshold 0.60 khi threshold phân loại là 0.5.
+        if uncertain_band is not None:
+            confidence_threshold = max(uncertain_band[1], 1.0 - uncertain_band[0])
+            confidence_threshold = max(confidence_threshold, 0.5)
+        self.confidence_threshold = float(confidence_threshold)
+        if not 0.0 < self.threshold < 1.0:
+            raise ValueError("threshold phải nằm trong khoảng (0, 1).")
+        if not 0.5 <= self.confidence_threshold <= 1.0:
+            raise ValueError("confidence_threshold phải nằm trong khoảng [0.5, 1.0].")
 
     def decide(self, probability: float) -> DecisionResult:
         """Đưa ra quyết định cho một xác suất đơn lẻ."""
+        if not 0.0 <= probability <= 1.0:
+            raise ValueError("probability phải nằm trong khoảng [0, 1].")
         label = "Positive" if probability >= self.threshold else "Negative"
-        uncertain = bool(self.uncertain_lower <= probability <= self.uncertain_upper)
+        confidence = max(probability, 1.0 - probability)
+        uncertain = bool(confidence < self.confidence_threshold)
         decision = "review_required" if uncertain else "accepted"
         return DecisionResult(label=label, decision=decision, uncertain=uncertain)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "decision_threshold": self.threshold,
-            "uncertain_lower": self.uncertain_lower,
-            "uncertain_upper": self.uncertain_upper,
+            "confidence_threshold": self.confidence_threshold,
         }
+
+
+def selective_policy_curve(
+    labels: np.ndarray | list[int],
+    probabilities: np.ndarray | list[float],
+    thresholds: list[float] | None = None,
+) -> list[dict[str, float]]:
+    """Tạo coverage/accepted-accuracy curve trên Calibration Set."""
+    y_true = np.asarray(labels, dtype=int)
+    probs = np.asarray(probabilities, dtype=float)
+    if len(y_true) != len(probs):
+        raise ValueError("labels và probabilities phải có cùng số phần tử.")
+    candidates = thresholds or [round(value, 2) for value in np.arange(0.50, 1.00, 0.05)]
+    confidence = np.maximum(probs, 1.0 - probs)
+    predictions = (probs >= 0.5).astype(int)
+    curve: list[dict[str, float]] = []
+    for threshold in candidates:
+        accepted = confidence >= threshold
+        accepted_count = int(accepted.sum())
+        coverage = accepted_count / len(y_true) if len(y_true) else 0.0
+        accepted_accuracy = (
+            float(np.mean(predictions[accepted] == y_true[accepted])) if accepted_count else 0.0
+        )
+        curve.append(
+            {
+                "confidence_threshold": float(threshold),
+                "coverage": round(coverage, 4),
+                "accepted_accuracy": round(accepted_accuracy, 4),
+                "review_rate": round(1.0 - coverage, 4),
+            }
+        )
+    return curve
+
+
+def tune_confidence_threshold(
+    labels: np.ndarray | list[int],
+    probabilities: np.ndarray | list[float],
+    *,
+    min_coverage: float = 0.5,
+    thresholds: list[float] | None = None,
+) -> tuple[float, list[dict[str, float]]]:
+    """Chọn tau trên Calibration bằng accepted accuracy, có ràng buộc coverage.
+
+    Khi nhiều tau có cùng accuracy, ưu tiên coverage cao hơn để policy bớt từ
+    chối dự đoán. Kết quả curve được lưu cùng artifact để quyết định có thể audit.
+    """
+    if not 0.0 <= min_coverage <= 1.0:
+        raise ValueError("min_coverage phải nằm trong khoảng [0, 1].")
+    curve = selective_policy_curve(labels, probabilities, thresholds)
+    eligible = [row for row in curve if row["coverage"] >= min_coverage]
+    if not eligible:
+        eligible = curve
+    chosen = max(
+        eligible,
+        key=lambda row: (row["accepted_accuracy"], row["coverage"], -row["confidence_threshold"]),
+    )
+    return float(chosen["confidence_threshold"]), curve

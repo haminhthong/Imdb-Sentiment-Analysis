@@ -7,7 +7,9 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 [![Code Style](https://img.shields.io/badge/Code%20Style-Clean%20Code-brightgreen.svg)](https://github.com/psf/black)
 
-> **CineSentiment** là một nền tảng NLP kỹ thuật chuẩn mực (**production-oriented NLP portfolio system**) phân tích và phân loại cảm xúc đánh giá phim tiếng Anh (IMDB Dataset). Dự án thiết lập quy trình đối chiếu chuẩn xác giữa **TF-IDF + Logistic Regression baseline** với các kiến trúc mạng nơ-ron hồi quy **LSTM**, **GRU**, và **BiLSTM** dưới giao thức kiểm định chống rò rỉ dữ liệu (Leakage-Safe Validation), hiệu chuẩn xác suất (Probability Calibration), chính sách quyết định bất định (Uncertainty Decision Policy) và phục vụ trực tuyến qua REST API và Streamlit.
+> **CineSentiment** là dịch vụ sentiment tiếng Anh tập trung vào một production
+> champion: **BiLSTM đã calibration**. TF-IDF + Logistic Regression là baseline
+> bắt buộc để kiểm chứng giá trị; LSTM/GRU chỉ giữ ở `notebooks/legacy/`.
 
 ---
 
@@ -17,12 +19,13 @@
 IMDB Reviews
   → Data QA & Multi-Level Anti-Leakage (Exact + Normalized SHA256)
   → Train-Only Text Processing Contract
-  → TF-IDF Baseline & LSTM / GRU / BiLSTM Candidates
-  → Validation Leaderboard & Multi-Criteria Champion Selection
-  → Temperature Scaling Calibration on Val
+  → TF-IDF Baseline & BiLSTM Candidate
+  → Validation Leaderboard & Baseline Release Gate
+  → Final Fit on Train + Validation
+  → Temperature Scaling & Abstention Policy on Calibration
   → Single-Pass Locked Official Test Evaluation
   → Multi-Slice Error Analysis (Length, OOV, Linguistic Taxonomy)
-  → Artifact Packaging Schema v2
+  → Versioned Artifact Packaging Schema v3
   → Production-Oriented FastAPI & Streamlit Serving
 ```
 
@@ -50,7 +53,7 @@ flowchart TD
     subgraph S2["2. DATA QUALITY & LEAKAGE CONTROL"]
         B1[Schema & Binary Label Validation] --> B2[Conflicting-Label Detection]
         B2 --> B3[Exact Raw Hash Dedup]
-        B3 --> B4[Normalized Text Hash Dedup & Near-Duplicate Audit]
+        B3 --> B4[Normalized Exact Hash Dedup & Overlap Audit]
     end
 
     subgraph S3["3. DEVELOPMENT SPLIT"]
@@ -60,14 +63,14 @@ flowchart TD
     end
 
     subgraph S4["4. TRAIN-ONLY TEXT CONTRACT"]
-        D1[HTML Cleanup & Lowercase] --> D2[word-regex-v1 Tokenizer]
+        D1[HTML Cleanup & Lowercase] --> D2[word-regex-v2 Tokenizer]
         D2 --> D3[Vocabulary Fit on Train ONLY]
         D3 --> D4[Truncation & Padding Contract]
     end
 
     subgraph S5["5. MODEL DEVELOPMENT"]
         E1[TF-IDF + Logistic Regression Baseline]
-        E2[LSTM / GRU / BiLSTM Candidates]
+        E2[BiLSTM Candidate]
         E1 --> E3[Validation Leaderboard]
         E2 --> E3
         E3 --> E4[Multi-Criteria Champion Policy]
@@ -84,7 +87,7 @@ flowchart TD
     end
 
     subgraph S8["8. MODEL PACKAGING"]
-        H[Weights + Vocabulary + Tokenizer Contract v1 + Schema v2 Metadata]
+        H[Weights + Vocabulary + Tokenizer Contract v2 + Schema v3 Metadata]
     end
 
     subgraph S9["9. ONLINE SERVING"]
@@ -131,7 +134,7 @@ Nhiều dự án NLP thông thường chỉ lọc trùng lặp bằng câu lện
 
 ## 5. Hợp Đồng Xử Lý Văn Bản (Train-Only Text Contract)
 
-- **Phiên bản Tokenizer:** `TOKENIZER_VERSION = "word-regex-v1"`.
+- **Phiên bản Tokenizer:** `TOKENIZER_VERSION = "word-regex-v2"`.
 - **Bảo toàn từ phủ định:** Regex `[a-z0-9]+(?:'[a-z0-9]+)?` giữ nguyên các từ co cụm phủ định như `don't`, `isn't`, `can't`, `won't`. Phủ định là tín hiệu quyết định trong phân tích cảm xúc, do đó hệ thống không áp dụng stopword removal tùy tiện.
 - **Train-Only Vocabulary:** Bộ từ vựng (`Vocabulary`) được xây dựng **CHỈ** từ tập Train (sau khi đã chia Stratified Split). Mọi token chỉ xuất hiện ở Validation hoặc Test được ánh xạ chính xác về token đặc biệt `<UNK>`.
 - **Toàn vẹn Train-Serving (Parity Invariant):** Cả quá trình huấn luyện và suy luận trực tuyến đều dùng chung hàm `encode_with_audit`, cam đoan cùng một văn bản sẽ tạo ra danh sách token và chỉ số index giống nhau 100%.
@@ -176,15 +179,12 @@ Thay vì chỉ chọn mô hình thuần túy theo Accuracy, hệ thống áp d�
 > [!IMPORTANT]
 > Điểm Sigmoid thô của mạng nơ-ron sâu ($\sigma(z)$) **chưa phải là xác suất chuẩn xác**. Mô hình học sâu thường mắc lỗi tự tin thái quá (dự đoán xác suất 0.99 nhưng thực tế sai 10%).
 
-- **Temperature Scaling:** Học một tham số vô hướng $T > 0$ tối ưu trên tập Validation Logits để làm mềm phân phối xác suất:
+- **Temperature Scaling:** Học một tham số vô hướng $T > 0$ tối ưu trên Calibration Logits để làm mềm phân phối xác suất:
   $$\hat{p} = \sigma\left(\frac{z}{T}\right)$$
 - **Các chỉ số đo lường hiệu chuẩn:**
   - **Brier Score:** Sai số bình phương trung bình giữa xác suất dự đoán và nhãn thực tế.
   - **Expected Calibration Error (ECE):** Độ lệch trung bình có trọng số giữa độ tin cậy và độ chính xác thực tế qua 10 bins xác suất.
-- **Vùng bất định (Uncertainty Band & Decision Policy):**
-  - $\hat{p} > 0.60 \implies$ `Positive` (Decision: `accepted`)
-  - $\hat{p} < 0.40 \implies$ `Negative` (Decision: `accepted`)
-  - $0.40 \le \hat{p} \le 0.60 \implies$ `Uncertain` (Decision: `review_required` — chuyển tiếp cho con người rà soát)
+- **Selective classification:** threshold phân loại là 0.5; `confidence = max(p, 1-p)`. Calibration chọn `confidence_threshold = τ`; confidence dưới τ được trả về `review_required`.
 
 ---
 
@@ -253,15 +253,15 @@ Dự án không dừng lại ở con số tổng thể mà mổ xẻ các nhóm 
 
 ---
 
-## 15. Đóng Gói Artifact Schema Version 2 & Tính Tái Lập
+## 15. Đóng Gói Artifact Schema Version 3 & Tính Tái Lập
 
-Checkpoint `model.pt` tuân thủ chuẩn siêu dữ liệu Version 2:
+Checkpoint `model.pt` tuân thủ chuẩn siêu dữ liệu Version 3:
 
 ```json
 {
-  "artifact_schema_version": 2,
+  "artifact_schema_version": 3,
   "model_type": "bilstm",
-  "tokenizer_version": "word-regex-v1",
+  "tokenizer_version": "word-regex-v2",
   "vocabulary_hash": "a4f8...c1e9",
   "training_data_hash": "e9b2...4f31",
   "decision_threshold": 0.5,
@@ -299,14 +299,14 @@ Checkpoint `model.pt` tuân thủ chuẩn siêu dữ liệu Version 2:
 ├── sentiment/                  # Core NLP Package
 │   ├── __init__.py             # Package initializer
 │   ├── config.py               # ExperimentConfig (dataclass, validation, temperature)
-│   ├── text.py                 # word-regex-v1, Exact & Normalized SHA256, Vocabulary
+│   ├── text.py                 # word-regex-v2, Exact & Normalized SHA256, Vocabulary
 │   ├── data_validation.py      # Schema check, Conflicting label, Anti-leakage dedup
 │   ├── data.py                 # IMDBDataset, DataLoader, DataBundle & Audit stats
 │   ├── model.py                # SentimentRNN (LSTM, GRU, BiLSTM with pack_padded_sequence)
 │   ├── calibration.py          # TemperatureScaler, Brier, ECE, DecisionPolicy
 │   ├── engine.py               # Training loop, Early stopping, Comprehensive evaluation
 │   ├── inference.py            # SentimentPredictor with calibration & reliability audit
-│   ├── artifacts.py            # Artifact Schema v2, plots & reliability diagrams
+│   ├── artifacts.py            # Artifact Schema v3, plots & reliability diagrams
 │   └── utils.py                # Reproducibility seed, device selector, latency benchmark
 ├── tests/                      # Pytest suite
 │   ├── test_invariants.py      # 14 kiểm thử bất biến kiến trúc và anti-leakage
@@ -363,12 +363,8 @@ python baseline.py --output-dir artifacts/baseline
 
 ### 4. Huấn luyện các mô hình ứng viên (Validation-Only Protocol)
 ```bash
-# Huấn luyện BiLSTM (default implementation)
-python train.py --model bilstm --epochs 15 --batch-size 128 --output-dir artifacts/bilstm
-
-# Huấn luyện GRU hoặc LSTM
-python train.py --model gru --epochs 15 --batch-size 128 --output-dir artifacts/gru
-python train.py --model lstm --epochs 15 --batch-size 128 --output-dir artifacts/lstm
+# Huấn luyện BiLSTM trên Train/Validation/Calibration; không có test flag
+python train.py --epochs 15 --batch-size 128 --output-dir runs/dev_bilstm
 ```
 
 ### 5. So sánh trên Validation & Chọn Champion
@@ -379,9 +375,11 @@ python compare_models.py
 
 ### 6. Mở Locked Test cho Champion duy nhất
 ```bash
-python evaluate_final.py --model-dir artifacts/bilstm
+python -m scripts.final_fit
+python -m scripts.calibrate
+python -m scripts.evaluate_release
 ```
-*Kết quả xuất tại `artifacts/final_test_report.md`.*
+*Kết quả release nằm tại `artifacts/releases/v1.0.0/`; Official Test chỉ được đọc ở bước cuối.*
 
 ### 7. Khởi chạy Web App & REST API
 ```bash

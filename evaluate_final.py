@@ -15,20 +15,30 @@ import joblib
 import numpy as np
 import torch
 
-from sentiment.calibration import compute_brier_score, compute_ece, compute_log_loss_score
 from sentiment.config import ExperimentConfig
 from sentiment.data import IMDBDataset
-from sentiment.data_validation import load_dataset, remove_train_test_overlap
+from sentiment.data_validation import (
+    compute_dataset_hash,
+    load_official_dataset,
+    validate_official_test_independence,
+)
 from sentiment.engine import evaluate_model
 from sentiment.model import SentimentRNN
-from sentiment.text import Vocabulary, tokenize
+from sentiment.text import Vocabulary, encode_with_audit, tokenize
 from sentiment.utils import select_device
 
 
 def evaluate_slices(
-    texts: list[str], labels: list[int], probabilities: np.ndarray, threshold: float = 0.5
+    texts: list[str],
+    labels: list[int],
+    probabilities: np.ndarray,
+    threshold: float = 0.5,
+    confidence_threshold: float = 0.6,
+    vocabulary: Vocabulary | None = None,
+    max_length: int = 256,
+    truncation_strategy: str = "head_tail",
 ) -> dict[str, Any]:
-    """Đo lường độ chính xác theo từng lát cắt độ dài và tỷ lệ OOV."""
+    """Đo lát cắt độ dài, truncation/OOV và selective coverage."""
     preds = (probabilities >= threshold).astype(int)
     corrects = (preds == np.array(labels)).astype(int)
 
@@ -57,7 +67,40 @@ def evaluate_slices(
             "accuracy": round(float(np.mean(v)), 4) if v else 0.0,
         }
 
-    return {"length_slices": length_report}
+    report: dict[str, Any] = {"length_slices": length_report}
+
+    confidence = np.maximum(probabilities, 1.0 - probabilities)
+    accepted = confidence >= confidence_threshold
+    report["selective"] = {
+        "confidence_threshold": confidence_threshold,
+        "coverage": round(float(np.mean(accepted)) if len(accepted) else 0.0, 4),
+        "accepted_accuracy": round(
+            float(np.mean((preds[accepted] == np.asarray(labels)[accepted])))
+            if np.any(accepted)
+            else 0.0,
+        ),
+        "review_rate": round(float(np.mean(~accepted)) if len(accepted) else 0.0, 4),
+    }
+
+    if vocabulary is not None:
+        audits = [
+            encode_with_audit(text, vocabulary, max_length, strategy=truncation_strategy)[2]
+            for text in texts
+        ]
+        quality_masks = {
+            "truncated": np.array([audit["is_truncated"] for audit in audits]),
+            "not_truncated": np.array([not audit["is_truncated"] for audit in audits]),
+            "low_used_oov": np.array([audit["used_oov_rate"] <= 0.20 for audit in audits]),
+            "high_used_oov": np.array([audit["used_oov_rate"] > 0.20 for audit in audits]),
+        }
+        report["quality_slices"] = {
+            name: {
+                "samples": int(mask.sum()),
+                "accuracy": round(float(np.mean(corrects[mask])) if np.any(mask) else 0.0, 4),
+            }
+            for name, mask in quality_masks.items()
+        }
+    return report
 
 
 def main() -> None:
@@ -66,12 +109,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--model-dir",
-        default="artifacts/bilstm",
+        default="artifacts/releases/v1.0.0",
         help="Thư mục chứa checkpoint mô hình Champion (ví dụ: artifacts/bilstm hoặc artifacts/baseline).",
     )
-    parser.add_argument("--train-data", default="train.csv")
-    parser.add_argument("--test-data", default="test.csv")
-    parser.add_argument("--output-report", default="artifacts/final_test_report.md")
+    parser.add_argument("--train-data", default="data/raw/train.csv")
+    parser.add_argument("--test-data", default="data/raw/test.csv")
+    parser.add_argument("--output-report", default="artifacts/releases/v1.0.0/final_test_report.md")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     args = parser.parse_args()
 
@@ -83,12 +126,14 @@ def main() -> None:
     print(f"-> Tap du lieu Test: {args.test_data}")
     print("-" * 65)
 
-    # 1. Nạp và làm sạch dữ liệu Test với anti-leakage
-    train_source = load_dataset(args.train_data)
-    test_frame = remove_train_test_overlap(train_source, load_dataset(args.test_data))
+    # 1. Đọc nguyên vẹn hai official split và chỉ audit overlap.
+    train_source = load_official_dataset(args.train_data)
+    test_frame = load_official_dataset(args.test_data)
+    overlap = validate_official_test_independence(train_source, test_frame)
     test_texts = test_frame["text"].tolist()
     test_labels = test_frame["label"].astype(int).tolist()
-    print(f"-> So mau Test doc lap hop le sau khi loc overlap: {len(test_frame):,}")
+    print(f"-> Official Test samples: {len(test_frame):,}")
+    print(f"-> Overlap audit       : {overlap['overlap_count']} mẫu")
 
     device = select_device(args.device)
     metrics: dict[str, Any] = {}
@@ -103,6 +148,15 @@ def main() -> None:
         vocab = Vocabulary.from_dict(checkpoint["vocabulary"])
         temperature = float(checkpoint.get("temperature") or 1.0)
         threshold = float(checkpoint.get("decision_threshold") or 0.5)
+        confidence_threshold = float(checkpoint.get("confidence_threshold") or 0.6)
+
+        expected_test_hash = checkpoint.get("official_test_hash")
+        if expected_test_hash not in {None, "", "unspecified"}:
+            actual_test_hash = compute_dataset_hash(test_frame)
+            if actual_test_hash != expected_test_hash:
+                raise ValueError(
+                    "Official Test hash không khớp artifact; dừng để bảo vệ locked benchmark."
+                )
 
         model = SentimentRNN(len(vocab), vocab.pad_index, config).to(device)
         model.load_state_dict(checkpoint["model_state"])
@@ -136,8 +190,18 @@ def main() -> None:
         raw_logits = metrics.pop("raw_logits")
         metrics.pop("raw_labels")
         scaled_logits = raw_logits / max(1e-4, temperature)
+        scaled_logits = np.clip(scaled_logits, -60.0, 60.0)
         probs = 1.0 / (1.0 + np.exp(-scaled_logits))
-        slice_report = evaluate_slices(test_texts, test_labels, probs, threshold)
+        slice_report = evaluate_slices(
+            test_texts,
+            test_labels,
+            probs,
+            threshold,
+            confidence_threshold,
+            vocab,
+            config.max_length,
+            config.truncation_strategy,
+        )
         metrics["error_slices"] = slice_report
 
         model_name = config.model_type.upper()
@@ -176,14 +240,14 @@ def main() -> None:
 
 ## 1. Các Chỉ Số Tổng Quan (Core Metrics)
 - **Mô hình Champion:** `{model_name}`
-- **Test Samples:** {len(test_frame):,} mẫu độc lập (đã loại sạch rò rỉ từ Train)
+    - **Test Samples:** {len(test_frame):,} mẫu từ Official Test (không chỉnh sửa)
 - **Test Accuracy:** **{metrics['accuracy']:.2%}**
 - **Test Macro-F1:** **{metrics['macro_f1']:.2%}**
 - **ROC-AUC:** {metrics['roc_auc']:.4f}
 - **PR-AUC:** {metrics['pr_auc']:.4f}
 - **Brier Score (Calibration):** {metrics['brier_score']:.4f}
 - **Expected Calibration Error (ECE):** {metrics['ece']:.4f}
-- **Log Loss:** {metrics['loss']:.4f}
+- **Log Loss:** {metrics['log_loss']:.4f}
 
 ## 2. Ma Trận Nhầm Lẫn (Confusion Matrix)
 ```text
@@ -197,8 +261,14 @@ Actual Positive :        {metrics['confusion_matrix'][1][0]:<12}        {metrics
 |---|---:|---:|
 {slices_md}
 
-## 4. Kết Luận Đánh Giá Độc Lập
-Mô hình `{model_name}` cho thấy hiệu năng tổng quát hóa ổn định, xác suất dự đoán được kiểm soát tốt thông qua Temperature Scaling và không bị suy giảm đột biến ở các đánh giá phim có độ dài lớn.
+## 4. Facts để diễn giải
+- **Official Test hash:** `{compute_dataset_hash(test_frame)}`
+- **Overlap audit:** `{overlap['overlap_count']}` mẫu
+- **Temperature:** `{metrics.get('temperature', 1.0):.4f}`
+- **Long-review slice accuracy:** `{metrics['error_slices']['length_slices']['>256 tokens']['accuracy']:.2%}` trên `{metrics['error_slices']['length_slices']['>256 tokens']['samples']:,}` mẫu
+
+> Báo cáo chỉ xuất số liệu và facts. Kết luận chất lượng cần dựa trên ngưỡng
+> được định trước, không được sinh tự động từ một câu khẳng định chung chung.
 """
 
     report_path = Path(args.output_report)

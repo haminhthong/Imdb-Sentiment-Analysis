@@ -1,7 +1,7 @@
-"""Cấu hình tập trung cho toàn bộ thí nghiệm phân loại cảm xúc.
+"""Cấu hình tập trung cho lifecycle của CineSentiment.
 
-Module này định nghĩa lớp ExperimentConfig quản lý toàn bộ siêu tham số
-huấn luyện, tiền xử lý, chiến lược cắt chuỗi, hiệu chuẩn xác suất và kiến trúc mô hình RNN.
+Các trường trong module này được lưu cùng artifact để bảo đảm lúc phục vụ
+suy luận dùng đúng preprocessing và kiến trúc đã được chốt trong lúc phát triển.
 """
 
 from dataclasses import asdict, dataclass
@@ -14,16 +14,17 @@ TruncationType = Literal["first", "head_tail"]
 
 @dataclass(slots=True)
 class ExperimentConfig:
-    """Cấu hình siêu tham số thí nghiệm có thể tái sử dụng và lưu cùng checkpoint.
+    """Cấu hình có thể tái sử dụng và lưu cùng checkpoint.
 
     Attributes:
         model_type (ModelType): Loại kiến trúc RNN ('lstm', 'gru', 'bilstm'). Mặc định là 'bilstm'.
         seed (int): Hạt giống ngẫu nhiên để đảm bảo khả năng tái lập kết quả. Mặc định là 42.
-        validation_size (float): Tỷ lệ validation từ dữ liệu train. Mặc định 0.2.
+        validation_size (float): Tỷ lệ validation trong Official Train. Mặc định 0.1.
+        calibration_size (float): Tỷ lệ calibration trong Official Train. Mặc định 0.1.
         min_frequency (int): Tần suất tối thiểu của từ để đưa vào từ điển. Mặc định là 5.
         max_vocabulary_size (int): Kích thước tối đa của bộ từ vựng. Mặc định là 50,000.
         max_length (int): Độ dài chuỗi tối đa sau khi pad/truncate. Mặc định là 256.
-        truncation_strategy (TruncationType): Chiến lược cắt chuỗi ('first' hoặc 'head_tail'). Mặc định 'first'.
+        truncation_strategy (TruncationType): Chiến lược cắt chuỗi đã được khóa.
         batch_size (int): Kích thước lô (batch size) khi huấn luyện. Mặc định là 128.
         embedding_dim (int): Số chiều của không gian nhúng từ (word embedding). Mặc định là 128.
         hidden_dim (int): Số chiều ẩn của lớp RNN. Mặc định là 128.
@@ -34,19 +35,21 @@ class ExperimentConfig:
         epochs (int): Số epoch huấn luyện tối đa. Mặc định là 15.
         patience (int): Số epoch chờ trước khi dừng sớm. Mặc định là 3.
         num_workers (int): Số tiến trình nạp dữ liệu cho PyTorch DataLoader. Mặc định là 0.
-        temperature (float | None): Hệ số hiệu chuẩn Temperature Scaling (fit trên validation). Mặc định None.
+        temperature (float | None): Hệ số Temperature Scaling fit trên calibration.
         decision_threshold (float): Ngưỡng phân loại nhị phân. Mặc định là 0.5.
-        uncertain_lower (float): Ranh giới dưới của vùng bất định. Mặc định là 0.40.
-        uncertain_upper (float): Ranh giới trên của vùng bất định. Mặc định là 0.60.
+        confidence_threshold (float): Ngưỡng confidence tối thiểu để chấp nhận dự đoán.
+        uncertain_lower/uncertain_upper: Trường cũ để đọc artifact v2; không dùng trong
+            lifecycle mới.
     """
 
     model_type: ModelType = "bilstm"
     seed: int = 42
-    validation_size: float = 0.2
+    validation_size: float = 0.1
+    calibration_size: float = 0.1
     min_frequency: int = 5
     max_vocabulary_size: int = 50_000
     max_length: int = 256
-    truncation_strategy: TruncationType = "first"
+    truncation_strategy: TruncationType = "head_tail"
     batch_size: int = 128
     embedding_dim: int = 128
     hidden_dim: int = 128
@@ -59,6 +62,8 @@ class ExperimentConfig:
     num_workers: int = 0
     temperature: float | None = None
     decision_threshold: float = 0.5
+    confidence_threshold: float = 0.6
+    # Giữ lại để phục hồi checkpoint v2. Policy v3 dùng confidence_threshold.
     uncertain_lower: float = 0.40
     uncertain_upper: float = 0.60
 
@@ -76,6 +81,10 @@ class ExperimentConfig:
             )
         if not 0 < self.validation_size < 1:
             raise ValueError("validation_size phải nằm trong khoảng (0, 1).")
+        if not 0 < self.calibration_size < 1:
+            raise ValueError("calibration_size phải nằm trong khoảng (0, 1).")
+        if self.validation_size + self.calibration_size >= 1:
+            raise ValueError("Tổng validation_size và calibration_size phải nhỏ hơn 1.")
 
         positive_values = {
             "min_frequency": self.min_frequency,
@@ -86,6 +95,7 @@ class ExperimentConfig:
             "hidden_dim": self.hidden_dim,
             "num_layers": self.num_layers,
             "learning_rate": self.learning_rate,
+            "weight_decay": self.weight_decay,
             "epochs": self.epochs,
             "patience": self.patience,
         }
@@ -98,6 +108,9 @@ class ExperimentConfig:
 
         if not 0.0 < self.decision_threshold < 1.0:
             raise ValueError("decision_threshold phải nằm trong khoảng (0, 1).")
+
+        if not 0.5 <= self.confidence_threshold <= 1.0:
+            raise ValueError("confidence_threshold phải nằm trong khoảng [0.5, 1.0].")
 
         if not (0.0 <= self.uncertain_lower < self.uncertain_upper <= 1.0):
             raise ValueError("Vùng bất định yêu cầu: 0.0 <= uncertain_lower < uncertain_upper <= 1.0.")

@@ -1,15 +1,14 @@
-"""Điểm chạy chính (CLI) để huấn luyện mô hình CineSentiment AI (LSTM, GRU, BiLSTM).
+"""Điểm chạy chính (CLI) để huấn luyện development BiLSTM của CineSentiment.
 
 Quy trình chuẩn hóa (Leakage-Safe Validation Protocol):
 1. Đọc dữ liệu, kiểm tra schema, deduplication theo raw & normalized hash.
 2. Huấn luyện mô hình và Early Stopping dựa trên Validation Loss.
-3. Học tham số Temperature Scaling DUY NHẤT từ Validation Logits.
-4. Đánh giá toàn diện và lưu `validation_metrics.json`.
-5. KHÔNG đánh giá tập Official Test trong giai đoạn lựa chọn mô hình ứng viên (chống Test Peeking).
+3. Early stopping chỉ nhìn Validation Loss.
+4. Lưu validation metrics và best development checkpoint.
+5. Final fit, calibration và Official Test được tách thành release steps riêng.
 
 Ví dụ sử dụng:
-    python train.py --model bilstm --epochs 15 --batch-size 128
-    python train.py --model gru --epochs 5 --device cpu --output-dir artifacts/gru
+    python train.py --epochs 15 --batch-size 128
 """
 
 import argparse
@@ -17,13 +16,7 @@ from pathlib import Path
 
 import torch
 
-from sentiment.artifacts import (
-    save_checkpoint,
-    save_json,
-    save_plots,
-    save_reliability_diagram,
-)
-from sentiment.calibration import TemperatureScaler
+from sentiment.artifacts import save_checkpoint, save_json, save_plots
 from sentiment.config import ExperimentConfig
 from sentiment.data import create_data_bundle
 from sentiment.engine import evaluate_model, train_model
@@ -38,24 +31,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        choices=["lstm", "gru", "bilstm"],
+        choices=["bilstm"],
         default="bilstm",
-        help="Kiến trúc mô hình RNN ('lstm', 'gru', 'bilstm'). Mặc định là 'bilstm' (default implementation).",
+        help="Mô hình production duy nhất của lifecycle v3: BiLSTM.",
     )
     parser.add_argument(
         "--train-data",
-        default="train.csv",
-        help="Đường dẫn tệp CSV dữ liệu huấn luyện. Mặc định là 'train.csv'.",
-    )
-    parser.add_argument(
-        "--test-data",
-        default="test.csv",
-        help="Đường dẫn tệp CSV dữ liệu kiểm thử. Mặc định là 'test.csv'.",
+        default="data/raw/train.csv",
+        help="Đường dẫn Official Train. Mặc định là 'data/raw/train.csv'.",
     )
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Thư mục xuất lưu checkpoint và kết quả. Mặc định là 'artifacts/<model>'.",
+        help="Thư mục xuất checkpoint development. Mặc định là 'runs/dev_<model>'.",
     )
     parser.add_argument(
         "--epochs",
@@ -72,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--truncation-strategy",
         choices=["first", "head_tail"],
-        default="first",
+        default="head_tail",
         help="Chiến lược cắt chuỗi ('first' hoặc 'head_tail'). Mặc định là 'first'.",
     )
     parser.add_argument(
@@ -87,11 +75,6 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="Thiết bị tính toán ('auto', 'cpu', 'cuda'). Mặc định là 'auto'.",
     )
-    parser.add_argument(
-        "--evaluate-test",
-        action="store_true",
-        help="Cờ tùy chọn đánh giá ngay trên tập Test (Lưu ý: Chỉ khuyến nghị cho Champion đã chọn).",
-    )
     return parser.parse_args()
 
 
@@ -100,6 +83,8 @@ def main() -> None:
     args = parse_args()
     config = ExperimentConfig(
         model_type=args.model,
+        validation_size=0.1,
+        calibration_size=0.1,
         epochs=args.epochs,
         batch_size=args.batch_size,
         truncation_strategy=args.truncation_strategy,
@@ -108,7 +93,7 @@ def main() -> None:
 
     seed_everything(config.seed)
     device = select_device(args.device)
-    output_dir = Path(args.output_dir or f"artifacts/{args.model}")
+    output_dir = Path(args.output_dir or f"runs/dev_{args.model}")
 
     print("=" * 65)
     print(f"*** HUAN LUYEN CINESENTIMENT PLATFORM - [{config.model_type.upper()}] ***")
@@ -121,12 +106,15 @@ def main() -> None:
     print("-" * 65)
 
     # 1. Nạp và kiểm toán chất lượng dữ liệu
-    print("1/4. Dang nap du lieu, kiem tra anti-leakage va tao DataBundle...")
-    data = create_data_bundle(args.train_data, args.test_data, config)
+    print("1/4. Dang nap Official Train va tao ba development split...")
+    data = create_data_bundle(args.train_data, config)
     print(f"     -> Phan bo mau     : {data.sizes}")
     print(f"     -> Kich thuoc tu dien: {len(data.vocabulary):,} tokens")
-    print(f"     -> OOV Rates       : Train={data.audit['oov_rates']['train']:.2%}, "
-          f"Val={data.audit['oov_rates']['validation']:.2%}")
+    print(
+        f"     -> OOV Rates       : Train={data.audit['oov_rates']['train']:.2%}, "
+        f"Val={data.audit['oov_rates']['validation']:.2%}, "
+        f"Calibration={data.audit['oov_rates']['calibration']:.2%}"
+    )
 
     # 2. Khởi tạo mô hình
     print("2/4. Dang khoi tao mo hinh...")
@@ -159,48 +147,35 @@ def main() -> None:
         patience=config.patience,
     )
 
-    # 4. Hiệu chuẩn xác suất (Temperature Scaling) & Đánh giá Validation
-    print("4/4. Hieu chuan Temperature Scaling & Danh gia Validation Leaderboard...")
-    val_raw = evaluate_model(
-        model, data.validation, loss_function, device, return_raw=True
-    )
-
-    # Học nhiệt độ T tối ưu trên Validation Logits
-    scaler = TemperatureScaler()
-    best_temperature = scaler.fit(val_raw["raw_logits"], val_raw["raw_labels"])
-    config.temperature = best_temperature
-
-    # Đánh giá lại Validation metrics với xác suất đã hiệu chuẩn
+    # 4. Chỉ đánh giá Validation để chọn model/epoch; calibration để release step.
+    print("4/4. Danh gia Validation va luu development checkpoint...")
     val_metrics = evaluate_model(
         model,
         data.validation,
         loss_function,
         device,
-        temperature=best_temperature,
         decision_threshold=config.decision_threshold,
     )
 
-    # Lưu checkpoint Schema v2 và các báo cáo Validation
+    # Đây là checkpoint huấn luyện, không phải artifact deploy.
     save_checkpoint(
-        output_dir / "model.pt",
+        output_dir / "best_dev.ckpt",
         model,
         data.vocabulary,
         config,
         training_data_hash=data.audit.get("train_data_hash"),
+        checkpoint_kind="best_dev",
+        model_version="1.0.0-dev",
+        source_dataset_hash=data.audit.get("source_train_hash"),
+        train_split_hash=data.audit.get("train_data_hash"),
+        validation_split_hash=data.audit.get("validation_data_hash"),
+        calibration_split_hash=data.audit.get("calibration_data_hash"),
+        best_dev_epoch=history.get("best_epoch"),
     )
     save_json(output_dir / "validation_metrics.json", val_metrics)
     save_json(output_dir / "history.json", history)
     save_json(output_dir / "data_audit.json", data.audit)
     save_plots(output_dir, history, val_metrics["confusion_matrix"])
-
-    # Vẽ biểu đồ hiệu chuẩn
-    calibrated_val_probs = scaler.calibrate(val_raw["raw_logits"])
-    save_reliability_diagram(
-        output_dir,
-        val_raw["raw_labels"],
-        calibrated_val_probs,
-        filename="validation_reliability.png",
-    )
 
     print("=" * 65)
     print("[SUCCESS] HOAN THANH HUAN LUYEN & VALIDATION!")
@@ -209,24 +184,9 @@ def main() -> None:
     print(f"-> Val ROC-AUC       : {val_metrics['roc_auc']:.4f}")
     print(f"-> Val Brier Score   : {val_metrics['brier_score']:.4f}")
     print(f"-> Val ECE           : {val_metrics['ece']:.4f}")
-    print(f"-> Temperature (T)   : {best_temperature:.4f}")
-    print(f"-> Checkpoint Schema : v2 ({output_dir / 'model.pt'})")
+    print(f"-> Best epoch         : {history['best_epoch']}")
+    print(f"-> Checkpoint Schema : v3 development ({output_dir / 'best_dev.ckpt'})")
     print(f"-> Validation Report : {output_dir / 'validation_metrics.json'}")
-
-    # Xử lý cờ ngoại lệ nếu người dùng muốn mở test sớm
-    if args.evaluate_test:
-        print("\n[WARNING] Dang mo tap Test (Khuyen nghi chi dung cho Champion thong qua evaluate_final.py)!")
-        test_metrics = evaluate_model(
-            model,
-            data.test,
-            loss_function,
-            device,
-            temperature=best_temperature,
-            decision_threshold=config.decision_threshold,
-        )
-        save_json(output_dir / "test_metrics.json", test_metrics)
-        print(f"-> Test Accuracy     : {test_metrics['accuracy']:.2%}")
-        print(f"-> Test Macro F1     : {test_metrics['macro_f1']:.2%}")
 
     print("=" * 65)
 

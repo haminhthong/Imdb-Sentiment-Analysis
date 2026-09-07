@@ -225,7 +225,7 @@ def test_high_oov_reports_warning(tmp_path):
 
 
 def test_checkpoint_tokenizer_contract_matches_runtime(tmp_path):
-    """Bất biến 14: Checkpoint Schema v2 phải lưu trữ TOKENIZER_VERSION và temperature."""
+    """Bất biến 14: Artifact v3 lưu text contract, policy và temperature."""
     checkpoint_file = tmp_path / "model.pt"
     config = ExperimentConfig(model_type="bilstm", embedding_dim=8, hidden_dim=8, num_layers=1, temperature=1.23)
     vocab = build_vocabulary(["good bad"], min_frequency=1)
@@ -233,7 +233,10 @@ def test_checkpoint_tokenizer_contract_matches_runtime(tmp_path):
     save_checkpoint(checkpoint_file, model, vocab, config)
 
     saved = torch.load(checkpoint_file, weights_only=True)
-    assert saved["artifact_schema_version"] == 2
+    assert saved["artifact_schema_version"] == 3
+    assert saved["schema_version"] == 3
     assert saved["tokenizer_version"] == TOKENIZER_VERSION
     assert saved["temperature"] == 1.23
+    assert "confidence_threshold" in saved
+    assert "source_dataset_hash" in saved
     assert "vocabulary_hash" in saved

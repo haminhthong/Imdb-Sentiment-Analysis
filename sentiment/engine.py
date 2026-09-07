@@ -87,9 +87,13 @@ def train_model(
     device: torch.device,
     epochs: int,
     patience: int,
-) -> dict[str, list[float]]:
-    """Huấn luyện mô hình với cơ chế Early Stopping theo dõi Validation Loss."""
-    history: dict[str, list[float]] = {
+) -> dict[str, Any]:
+    """Huấn luyện và early-stop chỉ dựa trên Validation Loss.
+
+    ``best_epoch`` được trả ra để final-fit có thể train cố định trên Train + Val
+    sau khi kiến trúc và số epoch đã được đóng băng.
+    """
+    history: dict[str, Any] = {
         "train_loss": [],
         "train_accuracy": [],
         "validation_loss": [],
@@ -98,6 +102,7 @@ def train_model(
     best_loss = float("inf")
     best_state = deepcopy(model.state_dict())
     stale_epochs = 0
+    best_epoch = 0
 
     for epoch in range(1, epochs + 1):
         train_metrics = run_epoch(
@@ -122,6 +127,7 @@ def train_model(
         if validation_metrics.loss < best_loss:
             best_loss = validation_metrics.loss
             best_state = deepcopy(model.state_dict())
+            best_epoch = epoch
             stale_epochs = 0
         else:
             stale_epochs += 1
@@ -133,6 +139,31 @@ def train_model(
                 break
 
     model.load_state_dict(best_state)
+    history["best_epoch"] = best_epoch
+    history["best_validation_loss"] = best_loss
+    return history
+
+
+def train_fixed_epochs(
+    model: nn.Module,
+    train_loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    loss_function: nn.Module,
+    device: torch.device,
+    epochs: int,
+) -> dict[str, list[float]]:
+    """Final fit không early stopping, dùng epoch đã chọn từ development."""
+    if epochs <= 0:
+        raise ValueError("epochs phải lớn hơn 0.")
+    history: dict[str, list[float]] = {"train_loss": [], "train_accuracy": []}
+    for epoch in range(1, epochs + 1):
+        metrics = run_epoch(model, train_loader, loss_function, device, optimizer)
+        history["train_loss"].append(metrics.loss)
+        history["train_accuracy"].append(metrics.accuracy)
+        print(
+            f"Final fit epoch {epoch:02d}/{epochs:02d} | "
+            f"Loss={metrics.loss:.4f}, Acc={metrics.accuracy:.2%}"
+        )
     return history
 
 
@@ -182,6 +213,8 @@ def evaluate_model(
 
     # Tính toán xác suất (có áp dụng Temperature Scaling nếu T != 1.0)
     scaled_logits = logits_arr / max(1e-4, temperature)
+    # Tránh overflow khi report trên checkpoint có logit cực lớn.
+    scaled_logits = np.clip(scaled_logits, -60.0, 60.0)
     probabilities = 1.0 / (1.0 + np.exp(-scaled_logits))
     predictions = (probabilities >= decision_threshold).astype(int)
 

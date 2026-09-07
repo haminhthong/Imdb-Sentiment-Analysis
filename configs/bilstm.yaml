@@ -1,0 +1,19 @@
+# Cấu hình production v1; validation/calibration tách khỏi Official Test.
+model_type: bilstm
+seed: 42
+validation_size: 0.10
+calibration_size: 0.10
+min_frequency: 5
+max_vocabulary_size: 50000
+max_length: 256
+truncation_strategy: head_tail
+batch_size: 128
+embedding_dim: 128
+hidden_dim: 128
+num_layers: 2
+dropout: 0.4
+learning_rate: 0.001
+weight_decay: 0.00001
+epochs: 15
+patience: 3
+gradient_clip: 1.0

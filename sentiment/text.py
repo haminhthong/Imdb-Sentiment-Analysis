@@ -1,9 +1,8 @@
-"""Tiền xử lý văn bản và quản lý bộ từ vựng (Vocabulary).
+"""Text contract dùng chung cho training, calibration và serving.
 
-Module này cung cấp các chức năng làm sạch văn bản, tách token (tokenization),
-băm văn bản (exact & normalized hash) để chống rò rỉ dữ liệu, xây dựng từ điển
-chỉ từ tập train, và chuyển đổi chuỗi thành chuỗi chỉ số (encoding & padding)
-với các chiến lược cắt chuỗi (first, head_tail).
+Contract v2: HTML entity được giải mã, thẻ HTML được loại bỏ, chữ được đưa về
+chữ thường và token được lấy bằng word-regex. Không dùng stopword removal hay
+stemming để giữ lại tín hiệu phủ định của bài toán sentiment.
 """
 
 import hashlib
@@ -13,7 +12,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable, Literal
 
-TOKENIZER_VERSION = "word-regex-v1"
+TOKENIZER_VERSION = "word-regex-v2"
 
 # Token đặc biệt cho Padding và Out-Of-Vocabulary
 PAD_TOKEN = "<PAD>"
@@ -24,7 +23,7 @@ TOKEN_PATTERN = re.compile(r"[a-z0-9]+(?:'[a-z0-9]+)?")
 # Regex loại bỏ tất cả các thẻ HTML (ví dụ: <br>, <p>, ...)
 HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
-# Tập từ vựng tiếng Anh phổ biến để kiểm tra cảnh báo ngôn ngữ ngoài miền
+# Một heuristic nhỏ để gắn cờ input có thể ngoài miền; đây không phải language detector.
 COMMON_ENGLISH_WORDS = {
     "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
     "of", "with", "by", "from", "is", "was", "are", "were", "it", "this",
@@ -57,7 +56,7 @@ def compute_raw_hash(text: str) -> str:
 
 
 def compute_normalized_text_hash(text: str) -> str:
-    """Tính mã băm SHA256 sau khi chuẩn hóa canonical tokenization.
+    """Tính ``normalized_exact_hash`` sau canonical tokenization.
 
     Hai văn bản chỉ khác nhau về chữ hoa/thường, thẻ HTML (như <br />),
     khoảng trắng thừa hoặc dấu câu ngoại lai sẽ có cùng normalized hash.
@@ -70,10 +69,10 @@ def compute_normalized_text_hash(text: str) -> str:
 
 
 def detect_language_warning(text: str) -> list[str]:
-    """Kiểm tra sơ bộ tính phù hợp ngôn ngữ tiếng Anh của văn bản đánh giá.
+    """Gắn cờ heuristic input có thể ngoài miền ngôn ngữ tiếng Anh.
 
     Returns:
-        list[str]: Danh sách các cảnh báo (ví dụ ['NON_ENGLISH_WARNING']) nếu phát hiện.
+        list[str]: Cảnh báo ``OUT_OF_DOMAIN_LANGUAGE_HEURISTIC`` nếu phát hiện.
     """
     if not isinstance(text, str) or not text.strip():
         return []
@@ -91,7 +90,7 @@ def detect_language_warning(text: str) -> list[str]:
     # hoặc tỷ lệ ký tự lạ vượt 25%
     has_english_token = any(token in COMMON_ENGLISH_WORDS for token in tokens)
     if (len(tokens) >= 5 and not has_english_token) or non_ascii_ratio > 0.25:
-        return ["NON_ENGLISH_WARNING"]
+        return ["OUT_OF_DOMAIN_LANGUAGE_HEURISTIC"]
 
     return []
 
@@ -234,18 +233,18 @@ def encode_with_audit(
     max_length: int,
     strategy: TruncationStrategy = "first",
 ) -> tuple[list[int], int, dict[str, Any]]:
-    """Mã hóa văn bản kèm báo cáo kiểm tra độ tin cậy (token audit metadata).
+    """Mã hóa văn bản kèm audit trước và sau khi cắt chuỗi.
 
     Returns:
         tuple[list[int], int, dict[str, Any]]:
             - encoded: Chuỗi chỉ số tokens [max_length].
             - length: Độ dài thực tế chuỗi dùng trong pack_padded_sequence.
-            - audit: Dictionary chứa 'input_tokens', 'used_tokens', 'is_truncated',
-                     'oov_count', 'oov_rate'.
+            - audit: Có ``input_oov_rate`` cho toàn bộ input và ``used_oov_rate``
+              cho đúng các token mô hình thực sự nhìn thấy.
     """
     tokens = tokenize(text)
     total_tokens = len(tokens)
-    oov_count, oov_rate = vocabulary.compute_oov_stats(tokens)
+    input_oov_count, input_oov_rate = vocabulary.compute_oov_stats(tokens)
 
     if not tokens:
         selected_tokens: list[str] = []
@@ -258,6 +257,7 @@ def encode_with_audit(
     else:  # strategy == "first"
         selected_tokens = tokens[:max_length]
 
+    used_oov_count, used_oov_rate = vocabulary.compute_oov_stats(selected_tokens)
     encoded = vocabulary.encode(selected_tokens)
     length = max(1, len(encoded))
     if not encoded:
@@ -274,8 +274,13 @@ def encode_with_audit(
         "input_tokens": total_tokens,
         "used_tokens": used_tokens,
         "is_truncated": is_truncated,
-        "oov_count": oov_count,
-        "oov_rate": round(oov_rate, 4),
+        "input_oov_count": input_oov_count,
+        "input_oov_rate": round(input_oov_rate, 4),
+        "used_oov_count": used_oov_count,
+        "used_oov_rate": round(used_oov_rate, 4),
+        # Alias v1/v2 để client cũ không bị vỡ trong lúc migrate.
+        "oov_count": used_oov_count,
+        "oov_rate": round(used_oov_rate, 4),
     }
 
     return encoded, length, audit

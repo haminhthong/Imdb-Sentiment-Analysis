@@ -15,7 +15,7 @@ import streamlit as st
 
 from sentiment.inference import SentimentPredictor
 
-CHECKPOINT_PATH = os.getenv("CHECKPOINT_PATH", "artifacts/bilstm/model.pt")
+CHECKPOINT_PATH = os.getenv("CHECKPOINT_PATH", "artifacts/releases/v1.0.0/model.pt")
 ARTIFACT_DIR = Path(CHECKPOINT_PATH).parent
 LOGGER = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ with tab_single:
                 aud_col1, aud_col2, aud_col3, aud_col4 = st.columns(4)
                 aud_col1.metric("Tổng Token Gốc", result.input_tokens)
                 aud_col2.metric("Token Đã Dùng", result.used_tokens)
-                aud_col3.metric("Tỷ Lệ OOV", f"{result.oov_rate:.1%}")
+                aud_col3.metric("OOV Đã Dùng", f"{result.used_oov_rate:.1%}")
                 aud_col4.metric("Cắt Chuỗi (Truncated)", "Có" if result.truncated else "Không")
 
                 if result.warnings:
@@ -181,7 +181,7 @@ with tab_batch:
                         "Xác Suất Hiệu Chuẩn": f"{res.positive_probability:.2%}",
                         "Raw Score": f"{res.positive_score:.2%}",
                         "Tokens": f"{res.used_tokens}/{res.input_tokens}",
-                        "OOV Rate": f"{res.oov_rate:.1%}",
+                        "OOV Rate (used)": f"{res.used_oov_rate:.1%}",
                         "Cảnh Báo": ", ".join(res.warnings) if res.warnings else "None",
                     }
                     for idx, (text, res) in enumerate(zip(lines, results))

@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    CHECKPOINT_PATH=/app/artifacts/bilstm/model.pt \
+    CHECKPOINT_PATH=/app/artifacts/releases/v1.0.0/model.pt \
     RATE_LIMIT_PER_MINUTE=60
 
 WORKDIR /app

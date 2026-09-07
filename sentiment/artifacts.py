@@ -1,7 +1,7 @@
-"""Quản lý lưu trữ Checkpoint Schema v2, tệp JSON kết quả và biểu đồ trực quan.
+"""Quản lý checkpoint training/release, tệp JSON và biểu đồ trực quan.
 
 Module này cung cấp các chức năng:
-1. Ghi PyTorch Checkpoint (`model.pt`) theo Artifact Schema Version 2 (metadata phong phú).
+1. Ghi PyTorch Checkpoint (`model.pt`) theo Artifact Schema Version 3 (metadata phong phú).
 2. Ghi tệp JSON báo cáo (`validation_metrics.json`, `test_metrics.json`, `history.json`).
 3. Vẽ và lưu đồ thị huấn luyện (Loss/Accuracy), Ma trận nhầm lẫn và Biểu đồ độ tin cậy (Reliability Diagram).
 """
@@ -26,26 +26,59 @@ def save_checkpoint(
     vocabulary: Vocabulary,
     config: ExperimentConfig,
     training_data_hash: str | None = None,
+    *,
+    model_version: str = "1.0.0",
+    checkpoint_kind: str = "training",
+    source_dataset_hash: str | None = None,
+    train_split_hash: str | None = None,
+    validation_split_hash: str | None = None,
+    calibration_split_hash: str | None = None,
+    official_test_hash: str | None = None,
+    git_commit: str | None = None,
+    best_dev_epoch: int | None = None,
+    final_fit_epoch: int | None = None,
+    final_metrics: dict[str, Any] | None = None,
 ) -> None:
-    """Lưu checkpoint PyTorch theo chuẩn Artifact Schema Version 2.
+    """Lưu checkpoint PyTorch theo chuẩn Artifact Schema v3.
 
     Bao gồm đầy đủ trọng số mô hình, từ điển, cấu hình siêu tham số,
-    phiên bản tokenizer, thông số temperature scaling và fingerprint dữ liệu.
+    phiên bản tokenizer, thông số calibration và fingerprint của từng split.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     checkpoint_payload = {
-        "artifact_schema_version": 2,
-        "model_type": config.model_type,
+        "artifact_schema_version": 3,
+        "schema_version": 3,
+        "model_version": model_version,
+        "checkpoint_kind": checkpoint_kind,
+        "architecture": {"type": config.model_type},
+        "model_type": config.model_type,  # Alias để đọc artifact v2.
         "tokenizer_version": TOKENIZER_VERSION,
         "vocabulary_hash": vocabulary.compute_hash(),
         "training_data_hash": training_data_hash or "unspecified",
+        "source_dataset_hash": source_dataset_hash or "unspecified",
+        "train_split_hash": train_split_hash or training_data_hash or "unspecified",
+        "validation_split_hash": validation_split_hash or "unspecified",
+        "calibration_split_hash": calibration_split_hash or "unspecified",
+        "official_test_hash": official_test_hash or "unspecified",
         "decision_threshold": config.decision_threshold,
+        "confidence_threshold": config.confidence_threshold,
         "temperature": config.temperature if config.temperature is not None else 1.0,
+        "preprocessing_contract": {
+            "tokenizer_version": TOKENIZER_VERSION,
+            "max_length": config.max_length,
+            "truncation_strategy": config.truncation_strategy,
+        },
+        "git_commit": git_commit or "unspecified",
+        "python_version": __import__("platform").python_version(),
         "torch_version": str(torch.__version__),
         "test_protocol": "imdb-official-v1",
-        "model_state": model.state_dict(),
+        "final_fit_epoch": final_fit_epoch,
+        "best_dev_epoch": best_dev_epoch,
+        "final_metrics": final_metrics or {},
+        # Lưu state CPU để artifact có thể chuyển máy/GPU an toàn.
+        "model_state": {key: value.detach().cpu() for key, value in model.state_dict().items()},
         "vocabulary": vocabulary.to_dict(),
         "config": config.to_dict(),
     }

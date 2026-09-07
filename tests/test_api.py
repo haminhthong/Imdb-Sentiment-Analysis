@@ -3,6 +3,7 @@
 import pytest
 
 pytest.importorskip("torch")
+pytest.importorskip("httpx2")
 
 from fastapi.testclient import TestClient
 

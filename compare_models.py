@@ -18,13 +18,17 @@ import joblib
 
 def read_validation_metrics(artifact_root: Path, model_name: str) -> dict | None:
     """Đọc tệp validation_metrics.json (hoặc tương thích ngược với metrics.json nếu có)."""
-    val_path = artifact_root / model_name / "validation_metrics.json"
-    if val_path.is_file():
-        return json.loads(val_path.read_text(encoding="utf-8"))
+    locations = [artifact_root / model_name]
+    if model_name.lower() == "bilstm":
+        locations.append(Path("runs/dev_bilstm"))
+    for location in locations:
+        val_path = location / "validation_metrics.json"
+        if val_path.is_file():
+            return json.loads(val_path.read_text(encoding="utf-8"))
 
-    fallback_path = artifact_root / model_name / "metrics.json"
-    if fallback_path.is_file():
-        return json.loads(fallback_path.read_text(encoding="utf-8"))
+        fallback_path = location / "metrics.json"
+        if fallback_path.is_file():
+            return json.loads(fallback_path.read_text(encoding="utf-8"))
 
     return None
 
@@ -35,6 +39,8 @@ def get_model_info(artifact_root: Path, model_name: str) -> tuple[int, float]:
     from sentiment.utils import measure_latency
 
     checkpoint_path = artifact_root / model_name / "model.pt"
+    if model_name.lower() == "bilstm" and not checkpoint_path.is_file():
+        checkpoint_path = Path("runs/dev_bilstm/best_dev.ckpt")
     if not checkpoint_path.is_file():
         return 0, 0.0
 
@@ -86,8 +92,20 @@ def select_champion(rows: list[dict], simplicity_margin: float = 0.005) -> tuple
     sorted_by_f1 = sorted(rows, key=lambda x: x["macro_f1"], reverse=True)
     best_candidate = sorted_by_f1[0]
 
+    baseline = next((row for row in rows if row.get("model") == "BASELINE"), None)
+    if baseline is not None and best_candidate.get("model") == "BILSTM":
+        baseline_delta = best_candidate["macro_f1"] - baseline["macro_f1"]
+        if baseline_delta <= 0 and best_candidate.get("latency", 0.0) > baseline.get(
+            "latency", 0.0
+        ):
+            return (
+                baseline,
+                "BiLSTM không cải thiện Validation Macro-F1 so với baseline và có "
+                "latency cao hơn; baseline giữ vai trò release gate.",
+            )
+
     # Kiểm tra xem có mô hình nhẹ hơn nằm trong biên độ dung sai không
-    complexity_rank = {"BASELINE": 1, "GRU": 2, "LSTM": 3, "BILSTM": 4}
+    complexity_rank = {"BASELINE": 1, "BILSTM": 2}
 
     chosen = best_candidate
     reason = f"Đạt Validation Macro-F1 cao nhất ({chosen['macro_f1']:.2%})."
@@ -144,10 +162,12 @@ def create_leaderboard_markdown(rows: list[dict], champion: dict, reason: str) -
     for row in sorted(rows, key=lambda x: x["macro_f1"], reverse=True):
         is_champ = row["model"] == champion["model"]
         champ_tag = "🥇 **CHAMPION**" if is_champ else "Candidate"
-        params_str = f"{row['params']:,}" if row["params"] > 0 else "N/A"
-        latency_str = f"{row['latency']:.2f} ms" if row["latency"] > 0 else "N/A"
-        ece_str = f"{row['ece']:.4f}" if "ece" in row else "N/A"
-        auc_str = f"{row['roc_auc']:.4f}" if "roc_auc" in row else "N/A"
+        params = row.get("params", 0)
+        latency = row.get("latency", 0.0)
+        params_str = f"{params:,}" if params > 0 else "N/A"
+        latency_str = f"{latency:.2f} ms" if latency > 0 else "N/A"
+        ece_str = f"{row.get('ece', 0.0):.4f}" if "ece" in row else "N/A"
+        auc_str = f"{row.get('roc_auc', 0.0):.4f}" if "roc_auc" in row else "N/A"
 
         lines.append(
             f"| **{row['model']}** | {params_str} | {row['loss']:.4f} | "
@@ -162,7 +182,7 @@ def create_leaderboard_markdown(rows: list[dict], champion: dict, reason: str) -
         f"- **Lý do lựa chọn:** {reason}",
         f"- **Bước tiếp theo:** Đóng băng toàn bộ checkpoint của `{champion['model']}` và chỉ mở tập Official Test một lần duy nhất với lệnh:",
         f"  ```bash",
-        f"  python evaluate_final.py --model-dir artifacts/{champion['model'].lower()}",
+        "  python -m scripts.final_fit && python -m scripts.calibrate && python -m scripts.evaluate_release",
         f"  ```",
         "",
     ])
@@ -182,7 +202,7 @@ def main() -> None:
     rows = []
 
     print("Đang đọc Validation Metrics từ các thư mục thí nghiệm...")
-    for model_name in ("baseline", "lstm", "gru", "bilstm"):
+    for model_name in ("baseline", "bilstm"):
         metrics = read_validation_metrics(artifact_root, model_name)
         if metrics is None:
             continue
@@ -201,7 +221,7 @@ def main() -> None:
             {
                 "model": model_name.upper(),
                 "params": params,
-                "loss": metrics.get("loss", 0.0),
+                "loss": metrics.get("log_loss", metrics.get("loss", 0.0)),
                 "accuracy": metrics.get("accuracy", 0.0),
                 "macro_f1": float(macro_f1 or 0.0),
                 "roc_auc": float(metrics.get("roc_auc", 0.0)),

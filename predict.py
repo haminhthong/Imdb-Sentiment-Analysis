@@ -23,8 +23,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--checkpoint",
-        default="artifacts/bilstm/model.pt",
-        help="Đường dẫn đến tệp mô hình PyTorch (.pt). Mặc định là 'artifacts/bilstm/model.pt'.",
+        default="artifacts/releases/v1.0.0/model.pt",
+        help="Đường dẫn release model.pt. Mặc định là 'artifacts/releases/v1.0.0/model.pt'.",
     )
     parser.add_argument(
         "--device",
@@ -62,4 +62,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

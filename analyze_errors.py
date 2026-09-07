@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from sentiment.data_validation import load_dataset, remove_train_test_overlap
+from sentiment.data_validation import load_official_dataset, validate_official_test_independence
 from sentiment.text import Vocabulary, tokenize
 
 # Patterns nhận diện taxonomy ngôn ngữ học
@@ -99,11 +99,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Phân tích lỗi chuyên sâu cho CineSentiment AI")
     parser.add_argument(
         "--model",
-        default="artifacts/bilstm/model.pt",
+        default="artifacts/releases/v1.0.0/model.pt",
         help="Đường dẫn checkpoint model.pt hoặc model.joblib.",
     )
-    parser.add_argument("--train-data", default="train.csv")
-    parser.add_argument("--test-data", default="test.csv")
+    parser.add_argument("--train-data", default="data/raw/train.csv")
+    parser.add_argument("--test-data", default="data/raw/test.csv")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--top", type=int, default=50)
     args = parser.parse_args()
@@ -116,8 +116,9 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Đang phân tích lỗi cho mô hình: {model_path}")
-    train_frame = load_dataset(args.train_data)
-    test_frame = remove_train_test_overlap(train_frame, load_dataset(args.test_data))
+    train_frame = load_official_dataset(args.train_data)
+    test_frame = load_official_dataset(args.test_data)
+    validate_official_test_independence(train_frame, test_frame)
 
     predictions, probabilities = get_predictions_and_probabilities(
         model_path, test_frame["text"].tolist()

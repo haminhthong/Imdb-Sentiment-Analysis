@@ -1,10 +1,10 @@
-"""Kiểm tra, làm sạch dữ liệu và ngăn ngừa rò rỉ (Anti-Data Leakage).
+"""Kiểm tra dữ liệu và bảo vệ ranh giới giữa các split.
 
 Module này thực hiện:
 1. Kiểm tra cấu trúc Schema và nhãn nhị phân {0, 1}.
 2. Phát hiện dữ liệu mâu thuẫn nhãn trên cả văn bản thô (raw text) và chuẩn hóa (normalized text).
-3. Loại bỏ trùng lặp nội bộ (exact duplicate & normalized duplicate).
-4. Loại bỏ triệt để rò rỉ giữa tập Train và Test (Train-Test Overlap) dựa trên mã băm chuẩn hóa.
+3. Phát hiện trùng lặp nội bộ (raw exact và normalized exact).
+4. Audit overlap giữa các split; Official Test không bao giờ bị sửa tự động.
 5. Thống kê phân phối độ dài token (p50, p90, p95, truncation rate).
 """
 
@@ -20,15 +20,17 @@ from .text import compute_normalized_text_hash, tokenize
 REQUIRED_COLUMNS = {"text", "label"}
 
 
-def load_dataset(path: str | Path) -> pd.DataFrame:
-    """Đọc CSV, kiểm tra schema, nhãn mâu thuẫn và loại bỏ trùng lặp chuẩn hóa.
+def load_dataset(path: str | Path, *, deduplicate: bool = True) -> pd.DataFrame:
+    """Đọc CSV và kiểm tra schema, nhãn mâu thuẫn.
 
     Quy trình kiểm tra chất lượng dữ liệu:
     - Xác thực sự tồn tại của tệp và các cột bắt buộc ('text', 'label').
     - Loại bỏ giá trị khuyết thiếu (NaN) và ép kiểu văn bản.
     - Kiểm tra nhãn nhị phân hợp lệ {0, 1}.
     - Bắt lỗi nhãn mâu thuẫn trên raw text và canonical normalized text.
-    - Loại bỏ trùng lặp nội bộ theo normalized text hash.
+    - Với ``deduplicate=True`` (mặc định), loại duplicate nội bộ theo normalized
+      exact hash. Official split nên dùng ``load_official_dataset`` để giữ nguyên
+      dữ liệu nguồn và chỉ audit, không sửa benchmark.
 
     Args:
         path (str | Path): Đường dẫn đến tệp CSV dữ liệu.
@@ -63,13 +65,15 @@ def load_dataset(path: str | Path) -> pd.DataFrame:
     norm_label_counts = frame.groupby("_norm_hash")["label"].nunique()
     if (norm_label_counts > 1).any():
         raise ValueError(
-            "Phát hiện nội dung tương đương (normalized near-duplicate) nhưng có nhãn mâu thuẫn."
+            "Phát hiện normalized exact duplicate nhưng có nhãn mâu thuẫn."
         )
 
     frame["label"] = frame["label"].astype("float32")
 
-    # Loại bỏ duplicate theo normalized hash, giữ bản ghi đầu tiên
-    frame = frame.drop_duplicates(subset=["_norm_hash"], keep="first")
+    # Chỉ deduplicate ở bước chuẩn bị development data. Official Test phải giữ
+    # nguyên từng dòng để hash và benchmark phản ánh đúng nguồn chính thức.
+    if deduplicate:
+        frame = frame.drop_duplicates(subset=["_norm_hash"], keep="first")
     frame = frame.drop(columns=["_norm_hash"]).reset_index(drop=True)
 
     if frame.empty:
@@ -78,14 +82,64 @@ def load_dataset(path: str | Path) -> pd.DataFrame:
     return frame
 
 
+def load_official_dataset(path: str | Path) -> pd.DataFrame:
+    """Đọc một official split theo chế độ bất biến (không drop hoặc sửa dòng).
+
+    Hàm vẫn kiểm tra schema, giá trị thiếu và nhãn mâu thuẫn; nó chỉ không loại
+    duplicate nội bộ. Nhờ vậy caller có thể phát hiện dataset bất thường thay vì
+    âm thầm thay đổi Official Test.
+    """
+    return load_dataset(path, deduplicate=False)
+
+
+def compute_split_overlap(
+    left_frame: pd.DataFrame, right_frame: pd.DataFrame
+) -> dict[str, int]:
+    """Đếm raw exact và normalized exact overlap giữa hai split.
+
+    ``normalized_exact`` chỉ là duplicate sau canonical tokenizer, không phải
+    semantic near-duplicate. Near-duplicate thật cần MinHash/SimHash/embedding
+    similarity và nằm ngoài phạm vi v1.
+    """
+    left_raw = set(left_frame["text"])
+    right_raw = set(right_frame["text"])
+    left_norm = set(left_frame["text"].map(compute_normalized_text_hash))
+    right_norm = set(right_frame["text"].map(compute_normalized_text_hash))
+    raw_overlap = right_frame["text"].isin(left_raw)
+    norm_overlap = right_frame["text"].map(compute_normalized_text_hash).isin(left_norm)
+    return {
+        "raw_exact_overlap": int(raw_overlap.sum()),
+        "normalized_exact_overlap": int(norm_overlap.sum()),
+        "overlap_count": int((raw_overlap | norm_overlap).sum()),
+    }
+
+
+def validate_official_test_independence(
+    train_frame: pd.DataFrame, official_test_frame: pd.DataFrame
+) -> dict[str, int]:
+    """Audit Official Test và dừng pipeline nếu phát hiện overlap.
+
+    Không trả về một test frame đã lọc. Dataset quality issue phải được xử lý ở
+    nguồn dữ liệu, không được biến thành một benchmark mới nhưng vẫn gọi là official.
+    """
+    overlap = compute_split_overlap(train_frame, official_test_frame)
+    if overlap["overlap_count"]:
+        raise ValueError(
+            "DATASET AUDIT FAILED: Official Test có overlap với Official Train "
+            f"({overlap['overlap_count']} mẫu; raw_exact={overlap['raw_exact_overlap']}, "
+            f"normalized_exact={overlap['normalized_exact_overlap']}). "
+            "Không tự động xóa mẫu khỏi Official Test."
+        )
+    return overlap
+
+
 def remove_train_test_overlap(
     train_frame: pd.DataFrame, test_frame: pd.DataFrame
 ) -> pd.DataFrame:
-    """Loại khỏi tập Test mọi nội dung đã xuất hiện trong tập Train.
+    """Compatibility helper cũ để xử lý dữ liệu không phải Official Test.
 
-    Sử dụng cả exact raw string lẫn normalized text hash (HTML clean + lowercase + tokenized)
-    để ngăn ngừa hoàn toàn hiện tượng rò rỉ dữ liệu (Data Leakage) qua các biến thể viết hoa,
-    khoảng trắng hoặc thẻ HTML.
+    Hàm này giữ lại để notebook cũ không hỏng. Release evaluator không gọi hàm
+    này; nó dùng ``validate_official_test_independence`` và fail-fast.
     """
     train_raw_set = set(train_frame["text"])
     train_norm_hashes = set(train_frame["text"].apply(compute_normalized_text_hash))
@@ -139,5 +193,8 @@ def compute_token_length_distribution(
 
 def compute_dataset_hash(frame: pd.DataFrame) -> str:
     """Tạo fingerprint SHA256 cho tập dữ liệu phục vụ artifact tracking."""
-    combined = frame["text"].str.cat(frame["label"].astype(str), sep=":::").str.cat(sep="\n")
+    # Chuẩn hóa label về int để hash không đổi giữa DataFrame vừa tạo (1) và
+    # DataFrame đọc CSV (1.0/float32).
+    labels = frame["label"].astype(int).astype(str)
+    combined = frame["text"].str.cat(labels, sep=":::").str.cat(sep="\n")
     return hashlib.sha256(combined.encode("utf-8", errors="replace")).hexdigest()

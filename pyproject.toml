@@ -1,3 +1,42 @@
+[project]
+name = "cinesentiment"
+version = "1.0.0"
+description = "Leakage-safe calibrated BiLSTM sentiment service for IMDB reviews"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24,<3",
+  "pandas>=2.0,<3",
+  "matplotlib>=3.7,<4",
+  "seaborn>=0.12,<1",
+  "scikit-learn>=1.3,<2",
+  "torch>=2.1,<3",
+  "tqdm>=4.66,<5",
+  "joblib>=1.3,<2",
+  "fastapi>=0.115,<1",
+  "httpx2>=0.1,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "streamlit>=1.38,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4,<9", "ruff>=0.6,<1"]
+
+[project.scripts]
+cinesentiment-train = "train:main"
+cinesentiment-baseline = "baseline:main"
+cinesentiment-final-fit = "scripts.final_fit:main"
+cinesentiment-calibrate = "scripts.calibrate:main"
+cinesentiment-evaluate = "scripts.evaluate_release:main"
+cinesentiment-predict = "predict:main"
+cinesentiment-api = "api:run"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["sentiment*", "scripts*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --basetemp=.pytest_tmp"
