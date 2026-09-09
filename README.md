@@ -338,7 +338,7 @@ Checkpoint `model.pt` tuân thủ chuẩn siêu dữ liệu Version 3:
 │   ├── artifacts.py            # Artifact Schema v3, plots & reliability diagrams
 │   └── utils.py                # Reproducibility seed, device selector, latency benchmark
 ├── tests/                      # Pytest suite
-│   ├── test_invariants.py      # 14 kiểm thử bất biến kiến trúc và anti-leakage
+│   ├── test_invariants.py      # 13 kiểm thử bất biến kiến trúc và anti-leakage
 │   ├── test_api.py             # Kiểm thử FastAPI endpoints
 │   ├── test_baseline.py        # Kiểm thử TF-IDF Logistic baseline
 │   ├── test_compare_models.py  # Kiểm thử Leaderboard generation
@@ -364,6 +364,8 @@ Checkpoint `model.pt` tuân thủ chuẩn siêu dữ liệu Version 3:
 ├── configs/bilstm.yaml         # Cấu hình tham chiếu
 ├── data/raw/                   # Official CSV, gitignored
 ├── data/processed/             # Dữ liệu xử lý, gitignored
+├── data/README.md               # Quy ước layout dữ liệu và smoke fixture
+├── notebooks/legacy/            # Notebook lịch sử, không phải production entrypoint
 ├── Dockerfile                  # Container hóa REST API
 ├── MODEL_CARD.md               # Model Card chi tiết
 ├── DATASET_CARD.md              # Dataset Card & Anti-leakage audit
