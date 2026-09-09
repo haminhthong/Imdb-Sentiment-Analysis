@@ -48,9 +48,7 @@ def select_device(requested: str = "auto") -> torch.device:
     if requested == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if requested == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError(
-            "Đã chỉ định CUDA nhưng không tìm thấy GPU khả dụng trên hệ thống."
-        )
+        raise RuntimeError("Đã chỉ định CUDA nhưng không tìm thấy GPU khả dụng trên hệ thống.")
     return torch.device(requested)
 
 

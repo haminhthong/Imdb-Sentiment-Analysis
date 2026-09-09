@@ -33,7 +33,9 @@ def read_split(root: Path, split: str) -> pd.DataFrame:
     for label_name, label in (("pos", 1), ("neg", 0)):
         directory = root / split / label_name
         for path in sorted(directory.glob("*.txt")):
-            rows.append({"text": path.read_text(encoding="utf-8", errors="replace"), "label": label})
+            rows.append(
+                {"text": path.read_text(encoding="utf-8", errors="replace"), "label": label}
+            )
     if not rows:
         raise ValueError(f"Không tìm thấy review trong {root / split}.")
     return pd.DataFrame(rows)
@@ -54,7 +56,9 @@ def main() -> None:
     train_csv = raw_dir / "train.csv"
     test_csv = raw_dir / "test.csv"
     if not args.force and (train_csv.exists() or test_csv.exists()):
-        raise FileExistsError("data/raw/train.csv hoặc test.csv đã tồn tại; dùng --force nếu muốn ghi đè.")
+        raise FileExistsError(
+            "data/raw/train.csv hoặc test.csv đã tồn tại; dùng --force nếu muốn ghi đè."
+        )
 
     print(f"Đang tải {args.url} ...")
     urllib.request.urlretrieve(args.url, archive)

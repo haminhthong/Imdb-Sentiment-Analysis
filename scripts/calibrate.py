@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -112,7 +113,14 @@ def main() -> None:
             "metrics": calibration_metrics,
         },
     )
-    save_json(output_dir / "data_manifest.json", bundle.audit)
+    release_manifest = dict(bundle.audit)
+    release_manifest["official_test_hash"] = official_test_hash
+    if manifest_path.is_file():
+        release_manifest["source_manifest"] = json.loads(manifest_path.read_text(encoding="utf-8"))
+    save_json(output_dir / "data_manifest.json", release_manifest)
+    model_card = Path("MODEL_CARD.md")
+    if model_card.is_file():
+        shutil.copyfile(model_card, output_dir / "model_card.md")
     save_reliability_diagram(
         output_dir,
         raw_metrics["raw_labels"],

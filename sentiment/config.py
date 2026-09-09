@@ -113,7 +113,9 @@ class ExperimentConfig:
             raise ValueError("confidence_threshold phải nằm trong khoảng [0.5, 1.0].")
 
         if not (0.0 <= self.uncertain_lower < self.uncertain_upper <= 1.0):
-            raise ValueError("Vùng bất định yêu cầu: 0.0 <= uncertain_lower < uncertain_upper <= 1.0.")
+            raise ValueError(
+                "Vùng bất định yêu cầu: 0.0 <= uncertain_lower < uncertain_upper <= 1.0."
+            )
 
     def to_dict(self) -> dict[str, Any]:
         """Chuyển đổi cấu hình thành dictionary để lưu vào JSON hoặc Checkpoint."""

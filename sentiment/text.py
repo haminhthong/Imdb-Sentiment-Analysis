@@ -25,10 +25,44 @@ HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
 # Một heuristic nhỏ để gắn cờ input có thể ngoài miền; đây không phải language detector.
 COMMON_ENGLISH_WORDS = {
-    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "was", "are", "were", "it", "this",
-    "that", "movie", "film", "actor", "actors", "story", "plot", "good",
-    "bad", "great", "one", "all", "see", "watch", "time", "very", "not",
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "but",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "of",
+    "with",
+    "by",
+    "from",
+    "is",
+    "was",
+    "are",
+    "were",
+    "it",
+    "this",
+    "that",
+    "movie",
+    "film",
+    "actor",
+    "actors",
+    "story",
+    "plot",
+    "good",
+    "bad",
+    "great",
+    "one",
+    "all",
+    "see",
+    "watch",
+    "time",
+    "very",
+    "not",
 }
 
 
@@ -63,9 +97,7 @@ def compute_normalized_text_hash(text: str) -> str:
     """
     tokens = tokenize(text)
     canonical_representation = " ".join(tokens)
-    return hashlib.sha256(
-        canonical_representation.encode("utf-8", errors="replace")
-    ).hexdigest()
+    return hashlib.sha256(canonical_representation.encode("utf-8", errors="replace")).hexdigest()
 
 
 def detect_language_warning(text: str) -> list[str]:
@@ -189,11 +221,7 @@ def build_vocabulary(
 
     # Dành 2 vị trí cho token đặc biệt <PAD> (index 0) và <UNK> (index 1)
     capacity = max(0, max_size - 2)
-    tokens = [
-        token
-        for token, count in counter.most_common()
-        if count >= min_frequency
-    ][:capacity]
+    tokens = [token for token, count in counter.most_common() if count >= min_frequency][:capacity]
 
     mapping = {PAD_TOKEN: 0, UNK_TOKEN: 1}
     mapping.update({token: index for index, token in enumerate(tokens, start=2)})

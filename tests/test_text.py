@@ -19,4 +19,3 @@ def test_encode_and_pad_tra_dung_do_dai_that():
     assert length == 2
     assert len(encoded) == 4
     assert encoded[-1] == vocabulary.pad_index
-

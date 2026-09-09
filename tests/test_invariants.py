@@ -9,15 +9,13 @@ torch = pytest.importorskip("torch")
 from sentiment.artifacts import save_checkpoint
 from sentiment.calibration import DecisionPolicy, TemperatureScaler
 from sentiment.config import ExperimentConfig
-from sentiment.data import IMDBDataset, create_data_bundle
-from sentiment.data_validation import load_dataset, remove_train_test_overlap
+from sentiment.data import create_data_bundle
+from sentiment.data_validation import load_dataset
 from sentiment.inference import SentimentPredictor
 from sentiment.model import SentimentRNN
 from sentiment.text import (
     TOKENIZER_VERSION,
     build_vocabulary,
-    compute_normalized_text_hash,
-    compute_raw_hash,
     encode_and_pad,
     encode_with_audit,
     tokenize,
@@ -35,10 +33,9 @@ def test_tokenizer_preserves_negation():
 def test_raw_duplicate_removed(tmp_path):
     """Bất biến 2: Dữ liệu trùng lặp thô (Exact duplicate) phải bị loại bỏ."""
     csv_file = tmp_path / "data.csv"
-    df = pd.DataFrame({
-        "text": ["A great movie.", "A great movie.", "A terrible movie."],
-        "label": [1, 1, 0]
-    })
+    df = pd.DataFrame(
+        {"text": ["A great movie.", "A great movie.", "A terrible movie."], "label": [1, 1, 0]}
+    )
     df.to_csv(csv_file, index=False)
     loaded = load_dataset(csv_file)
     assert len(loaded) == 2
@@ -47,15 +44,17 @@ def test_raw_duplicate_removed(tmp_path):
 def test_normalized_duplicate_removed(tmp_path):
     """Bất biến 3: Dữ liệu trùng lặp chuẩn hóa (Normalized duplicate) hoa/thường, HTML phải bị loại."""
     csv_file = tmp_path / "data.csv"
-    df = pd.DataFrame({
-        "text": [
-            "This movie is GREAT!",
-            "this movie is great",
-            "This movie is great.<br /><br />",
-            "Completely different movie."
-        ],
-        "label": [1, 1, 1, 0]
-    })
+    df = pd.DataFrame(
+        {
+            "text": [
+                "This movie is GREAT!",
+                "this movie is great",
+                "This movie is great.<br /><br />",
+                "Completely different movie.",
+            ],
+            "label": [1, 1, 1, 0],
+        }
+    )
     df.to_csv(csv_file, index=False)
     loaded = load_dataset(csv_file)
     # 3 mẫu đầu là normalized duplicate của nhau -> chỉ giữ lại 1
@@ -65,55 +64,31 @@ def test_normalized_duplicate_removed(tmp_path):
 def test_conflicting_duplicate_rejected(tmp_path):
     """Bất biến 4: Trùng lặp nội dung nhưng có nhãn mâu thuẫn phải bị từ chối với ValueError."""
     csv_file = tmp_path / "conflict.csv"
-    df = pd.DataFrame({
-        "text": ["This movie is amazing!", "this movie is amazing"],
-        "label": [1, 0]
-    })
+    df = pd.DataFrame(
+        {"text": ["This movie is amazing!", "this movie is amazing"], "label": [1, 0]}
+    )
     df.to_csv(csv_file, index=False)
     with pytest.raises(ValueError, match="mâu thuẫn"):
         load_dataset(csv_file)
 
 
-def test_train_test_overlap_removed():
-    """Bất biến 5: Mẫu test có nội dung tương đương train (kể cả HTML, hoa thường) phải bị loại khỏi test."""
-    train_df = pd.DataFrame({
-        "text": ["Outstanding performance by the actors!"],
-        "label": [1]
-    })
-    test_df = pd.DataFrame({
-        "text": [
-            "outstanding performance by the actors!<br />",  # Trùng normalized!
-            "Another independent review."
-        ],
-        "label": [1, 0]
-    })
-    cleaned_test = remove_train_test_overlap(train_df, test_df)
-    assert len(cleaned_test) == 1
-    assert cleaned_test.iloc[0]["text"] == "Another independent review."
-
-
 def test_vocabulary_uses_train_only(tmp_path):
     """Bất biến 6: Từ điển chỉ được xây từ tập Train sau khi chia, từ mới ở Val/Test phải là UNK."""
     train_csv = tmp_path / "train.csv"
-    test_csv = tmp_path / "test.csv"
-
     # Train có 10 mẫu với các từ 'apple', 'banana'
-    pd.DataFrame({
-        "text": [f"apple banana movie sample {i}" for i in range(10)],
-        "label": [1, 0] * 5
-    }).to_csv(train_csv, index=False)
+    pd.DataFrame(
+        {"text": [f"apple banana movie sample {i}" for i in range(10)], "label": [1, 0] * 5}
+    ).to_csv(train_csv, index=False)
 
-    # Test có từ 'papaya' độc quyền
-    pd.DataFrame({
-        "text": ["papaya fruit review"],
-        "label": [1]
-    }).to_csv(test_csv, index=False)
-
-    config = ExperimentConfig(validation_size=0.2, min_frequency=1, max_length=10)
-    bundle = create_data_bundle(train_csv, test_csv, config)
+    config = ExperimentConfig(
+        validation_size=0.2,
+        calibration_size=0.1,
+        min_frequency=1,
+        max_length=10,
+    )
+    bundle = create_data_bundle(train_csv, config)
 
     assert "papaya" not in bundle.vocabulary.token_to_index
-    assert bundle.vocabulary.token_to_index.get("papaya") is None
 
 
 def test_sequence_length_never_exceeds_max_length():
@@ -158,8 +133,8 @@ def test_train_inference_tokenization_parity():
     assert audit["input_tokens"] == 5
 
 
-def test_calibration_fit_on_validation_only():
-    """Bất biến 10: Temperature Scaling học được tham số nhiệt độ T > 0 từ validation logits."""
+def test_calibration_fit_on_calibration_split():
+    """Bất biến 10: Temperature Scaling học T từ Calibration logits độc lập."""
     # Giả lập model bị overconfident: logits lớn (+10 và -10) trong khi labels có nhiễu
     logits = np.array([10.0, -10.0, 8.0, -8.0, 9.0, -9.0], dtype=np.float32)
     labels = np.array([1, 0, 1, 0, 0, 1], dtype=np.int32)
@@ -172,8 +147,8 @@ def test_calibration_fit_on_validation_only():
     assert np.all((calibrated >= 0.0) & (calibrated <= 1.0))
 
 
-def test_decision_policy_uncertainty_zone():
-    """Bất biến 11: Điểm số trong vùng 0.40 - 0.60 phải được gắn cờ uncertain / review_required."""
+def test_decision_policy_confidence_threshold():
+    """Bất biến 11: Confidence thấp hơn tau phải được gắn cờ review_required."""
     policy = DecisionPolicy(threshold=0.5, uncertain_band=(0.40, 0.60))
 
     res_pos = policy.decide(0.85)
@@ -195,7 +170,9 @@ def test_decision_policy_uncertainty_zone():
 def test_long_input_reports_truncation_warning(tmp_path):
     """Bất biến 12: Review dài vượt max_length phải có cảnh báo TRUNCATED_INPUT."""
     checkpoint_file = tmp_path / "model.pt"
-    config = ExperimentConfig(model_type="gru", embedding_dim=8, hidden_dim=8, num_layers=1, max_length=5)
+    config = ExperimentConfig(
+        model_type="gru", embedding_dim=8, hidden_dim=8, num_layers=1, max_length=5
+    )
     vocab = build_vocabulary(["word one two three four five six seven"], min_frequency=1)
     model = SentimentRNN(len(vocab), vocab.pad_index, config)
     save_checkpoint(checkpoint_file, model, vocab, config)
@@ -212,7 +189,9 @@ def test_long_input_reports_truncation_warning(tmp_path):
 def test_high_oov_reports_warning(tmp_path):
     """Bất biến 13: Văn bản có phần lớn từ chưa từng thấy phải trả về cảnh báo HIGH_OOV_WARNING."""
     checkpoint_file = tmp_path / "model.pt"
-    config = ExperimentConfig(model_type="lstm", embedding_dim=8, hidden_dim=8, num_layers=1, max_length=10)
+    config = ExperimentConfig(
+        model_type="lstm", embedding_dim=8, hidden_dim=8, num_layers=1, max_length=10
+    )
     vocab = build_vocabulary(["known word only"], min_frequency=1)
     model = SentimentRNN(len(vocab), vocab.pad_index, config)
     save_checkpoint(checkpoint_file, model, vocab, config)
@@ -227,7 +206,9 @@ def test_high_oov_reports_warning(tmp_path):
 def test_checkpoint_tokenizer_contract_matches_runtime(tmp_path):
     """Bất biến 14: Artifact v3 lưu text contract, policy và temperature."""
     checkpoint_file = tmp_path / "model.pt"
-    config = ExperimentConfig(model_type="bilstm", embedding_dim=8, hidden_dim=8, num_layers=1, temperature=1.23)
+    config = ExperimentConfig(
+        model_type="bilstm", embedding_dim=8, hidden_dim=8, num_layers=1, temperature=1.23
+    )
     vocab = build_vocabulary(["good bad"], min_frequency=1)
     model = SentimentRNN(len(vocab), vocab.pad_index, config)
     save_checkpoint(checkpoint_file, model, vocab, config)

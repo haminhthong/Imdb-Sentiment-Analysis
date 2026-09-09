@@ -13,4 +13,3 @@ def test_model_tra_mot_logit_cho_moi_mau(model_type):
     tokens = torch.tensor([[2, 3, 0], [4, 5, 6]])
     lengths = torch.tensor([2, 3])
     assert model(tokens, lengths).shape == (2,)
-

@@ -10,17 +10,24 @@ Các tính năng nổi bật:
 4. Kiểm toán chuỗi đầu vào: phát hiện cắt chuỗi (truncation), tỷ lệ OOV cao và cảnh báo ngôn ngữ.
 """
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import numpy as np
+import joblib
 import torch
 
 from .calibration import DecisionPolicy, DecisionResult
 from .config import ExperimentConfig
 from .model import SentimentRNN
-from .text import TOKENIZER_VERSION, Vocabulary, detect_language_warning, encode_with_audit
+from .text import (
+    TOKENIZER_VERSION,
+    Vocabulary,
+    detect_language_warning,
+    encode_with_audit,
+    tokenize,
+)
 
 
 @dataclass(frozen=True)
@@ -123,9 +130,9 @@ class SentimentPredictor:
             else None,
         )
 
-        self.model = SentimentRNN(
-            len(self.vocabulary), self.vocabulary.pad_index, self.config
-        ).to(self.device)
+        self.model = SentimentRNN(len(self.vocabulary), self.vocabulary.pad_index, self.config).to(
+            self.device
+        )
         self.model.load_state_dict(checkpoint["model_state"])
         self.model.eval()
 
@@ -223,3 +230,122 @@ class SentimentPredictor:
             )
 
         return results
+
+
+@dataclass(frozen=True)
+class _BaselineConfig:
+    """Metadata tối thiểu để baseline dùng chung contract serving với RNN."""
+
+    model_type: str = "tfidf_logistic_regression"
+    max_length: int = 0
+    truncation_strategy: str = "none"
+
+
+class BaselinePredictor:
+    """Adapter suy luận cho release TF-IDF + Logistic Regression.
+
+    Baseline không có vocabulary neural hoặc truncation. Adapter vẫn trả về
+    cùng ``PredictionResult`` để API, CLI và Streamlit không phải biết chi tiết
+    implementation của từng champion.
+    """
+
+    def __init__(self, model_path: str | Path) -> None:
+        self.checkpoint_path = Path(model_path)
+        if not self.checkpoint_path.is_file():
+            raise FileNotFoundError(f"Không tìm thấy baseline artifact: {self.checkpoint_path}")
+
+        self.pipeline = joblib.load(self.checkpoint_path)
+        if not hasattr(self.pipeline, "predict_proba"):
+            raise ValueError("Baseline artifact không cung cấp predict_proba().")
+
+        self.model = self
+        self.config = _BaselineConfig()
+        self.temperature = 1.0
+        self.decision_threshold = 0.5
+        self.confidence_threshold = 0.5
+        self.model_version = "1.0.0-baseline"
+        self.tokenizer_version = TOKENIZER_VERSION
+        self.vocabulary = self._get_vocabulary()
+        self._load_metadata()
+        self.decision_policy = DecisionPolicy(
+            threshold=self.decision_threshold,
+            confidence_threshold=self.confidence_threshold,
+        )
+
+    def _get_vocabulary(self) -> dict[str, int]:
+        """Lấy vocabulary n-gram của TF-IDF để hiển thị thông tin artifact."""
+        try:
+            return dict(self.pipeline.named_steps["tfidf"].vocabulary_)
+        except (AttributeError, KeyError, TypeError):
+            return {}
+
+    def _load_metadata(self) -> None:
+        """Nạp metadata release nếu package baseline đã tạo tệp metadata."""
+        metadata_path = self.checkpoint_path.with_name("baseline_metadata.json")
+        if not metadata_path.is_file():
+            return
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        self.model_version = str(metadata.get("model_version", self.model_version))
+        self.decision_threshold = float(metadata.get("decision_threshold", self.decision_threshold))
+        self.confidence_threshold = float(
+            metadata.get("confidence_threshold", self.confidence_threshold)
+        )
+
+    def count_parameters(self) -> int:
+        """Trả số hệ số tuyến tính để giữ API ``/info`` đồng nhất."""
+        classifier = self.pipeline.named_steps.get("classifier")
+        if classifier is None:
+            return 0
+        return int(classifier.coef_.size + classifier.intercept_.size)
+
+    def predict(self, text: str) -> PredictionResult:
+        """Dự đoán một văn bản bằng baseline."""
+        return self.predict_batch([text])[0]
+
+    def predict_batch(self, texts: list[str]) -> list[PredictionResult]:
+        """Dự đoán batch và ánh xạ kết quả về response contract chung."""
+        if not texts:
+            raise ValueError("Danh sách câu đánh giá đầu vào không được để trống.")
+        if any(not isinstance(text, str) or not text.strip() for text in texts):
+            raise ValueError("Mỗi mẫu đánh giá phải là một chuỗi văn bản không rỗng.")
+
+        probabilities = self.pipeline.predict_proba(texts)[:, 1]
+        results: list[PredictionResult] = []
+        for text, probability in zip(texts, probabilities):
+            probability = float(probability)
+            decision = self.decision_policy.decide(probability)
+            warnings = detect_language_warning(text)
+            token_count = len(tokenize(text))
+            results.append(
+                PredictionResult(
+                    label=decision.label,
+                    positive_probability=probability,
+                    confidence=max(probability, 1.0 - probability),
+                    positive_score=probability,
+                    decision=decision.decision,
+                    uncertain=decision.uncertain,
+                    input_tokens=token_count,
+                    used_tokens=token_count,
+                    truncated=False,
+                    input_oov_rate=0.0,
+                    used_oov_rate=0.0,
+                    oov_rate=0.0,
+                    model_version=self.model_version,
+                    tokenizer_version=self.tokenizer_version,
+                    warnings=warnings,
+                )
+            )
+        return results
+
+
+Predictor = SentimentPredictor | BaselinePredictor
+
+
+def load_predictor(model_path: str | Path, device: str = "cpu") -> Predictor:
+    """Nạp đúng adapter theo loại artifact mà không làm caller biết format file."""
+    path = Path(model_path)
+    if path.suffix == ".pt":
+        return SentimentPredictor(path, device=device)
+    if path.suffix == ".joblib":
+        return BaselinePredictor(path)
+    raise ValueError("Artifact phải có phần mở rộng .pt hoặc .joblib.")

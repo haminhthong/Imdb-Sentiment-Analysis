@@ -8,7 +8,7 @@ Ví dụ sử dụng:
 import argparse
 from pathlib import Path
 
-from sentiment.inference import SentimentPredictor
+from sentiment.inference import load_predictor
 from sentiment.utils import select_device
 
 
@@ -47,13 +47,13 @@ def main() -> None:
         text = args.text
 
     device = select_device(args.device)
-    predictor = SentimentPredictor(args.checkpoint, str(device))
+    predictor = load_predictor(args.checkpoint, str(device))
     result = predictor.predict(text)
 
     print("=" * 60)
     print("🎬 KẾT QUẢ PHÂN TÍCH CẢM XÚC - CINESENTIMENT AI")
     print("=" * 60)
-    print(f"• Nội dung nhập vào : \"{text[:80]}{'...' if len(text) > 80 else ''}\"")
+    print(f'• Nội dung nhập vào : "{text[:80]}{"..." if len(text) > 80 else ""}"')
     print(f"• Cảm xúc dự đoán   : [{result.label.upper()}]")
     print(f"• Xác suất Positive : {result.positive_probability:.2%}")
     print(f"• Độ tin cậy (Conf) : {result.confidence:.2%}")

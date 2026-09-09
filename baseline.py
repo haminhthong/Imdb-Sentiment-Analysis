@@ -99,7 +99,9 @@ def evaluate_baseline(pipeline: Pipeline, texts, labels) -> dict:
 evaluate = evaluate_baseline
 
 
-def extract_top_features(pipeline: Pipeline, top_k: int = 15) -> dict[str, list[dict[str, float | str]]]:
+def extract_top_features(
+    pipeline: Pipeline, top_k: int = 15
+) -> dict[str, list[dict[str, float | str]]]:
     """Trích xuất các n-gram có trọng số dương và âm cao nhất (Feature Importance).
 
     Lưu ý kỹ thuật: Trọng số hồi quy biểu thị mức độ tương quan đặc trưng trong tập huấn luyện,
@@ -115,12 +117,10 @@ def extract_top_features(pipeline: Pipeline, top_k: int = 15) -> dict[str, list[
 
     return {
         "top_positive_ngrams": [
-            {"ngram": str(feature_names[i]), "weight": float(coefs[i])}
-            for i in top_pos_idx
+            {"ngram": str(feature_names[i]), "weight": float(coefs[i])} for i in top_pos_idx
         ],
         "top_negative_ngrams": [
-            {"ngram": str(feature_names[i]), "weight": float(coefs[i])}
-            for i in top_neg_idx
+            {"ngram": str(feature_names[i]), "weight": float(coefs[i])} for i in top_neg_idx
         ],
     }
 
@@ -151,9 +151,7 @@ def main() -> None:
         max_vocabulary_size=args.max_features,
     )
     train_source = load_dataset(args.train_data)
-    train_frame, validation_frame, calibration_frame = split_development_frame(
-        train_source, config
-    )
+    train_frame, validation_frame, calibration_frame = split_development_frame(train_source, config)
 
     print("=" * 60)
     print("*** HUAN LUYEN BASELINE TF-IDF + LOGISTIC REGRESSION ***")

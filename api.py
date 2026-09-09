@@ -18,7 +18,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
-from sentiment.inference import SentimentPredictor
+from sentiment.inference import Predictor, load_predictor
 
 APP_NAME = "CineSentiment AI REST API"
 CHECKPOINT_PATH = os.getenv("CHECKPOINT_PATH", "artifacts/releases/v1.0.0/model.pt")
@@ -120,12 +120,12 @@ class ModelInfoResponse(BaseModel):
 
 
 @lru_cache(maxsize=1)
-def get_predictor() -> SentimentPredictor:
-    """Nạp trọng số mô hình vào RAM một lần duy nhất (Singleton Pattern)."""
-    return SentimentPredictor(CHECKPOINT_PATH, device="cpu")
+def get_predictor() -> Predictor:
+    """Nạp model.pt hoặc model.joblib vào RAM một lần duy nhất."""
+    return load_predictor(CHECKPOINT_PATH, device="cpu")
 
 
-def get_ready_predictor() -> SentimentPredictor:
+def get_ready_predictor() -> Predictor:
     """Lấy predictor hoặc trả lỗi 503 khi model chưa sẵn sàng."""
     try:
         return get_predictor()
@@ -228,8 +228,7 @@ def metrics() -> Response:
         "# TYPE cinesentiment_request_latency_seconds_total counter\n"
         f"cinesentiment_request_latency_seconds_total {latency:.6f}\n"
         + "".join(
-            f"# TYPE cinesentiment_{key}_total counter\n"
-            f"cinesentiment_{key}_total {value}\n"
+            f"# TYPE cinesentiment_{key}_total counter\ncinesentiment_{key}_total {value}\n"
             for key, value in counters.items()
         )
         + "# TYPE cinesentiment_request_latency_seconds gauge\n"

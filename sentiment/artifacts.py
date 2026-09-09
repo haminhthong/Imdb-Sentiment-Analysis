@@ -7,6 +7,8 @@ Module này cung cấp các chức năng:
 """
 
 import json
+import platform
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,22 @@ from torch import nn
 
 from .config import ExperimentConfig
 from .text import TOKENIZER_VERSION, Vocabulary
+
+
+def resolve_git_commit() -> str:
+    """Lấy Git SHA hiện tại để artifact có thể truy nguyên về source code."""
+    try:
+        repository = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ["git", "-c", f"safe.directory={repository}", "rev-parse", "HEAD"],
+            cwd=repository,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip() or "unspecified"
+    except (OSError, subprocess.CalledProcessError):
+        return "unspecified"
 
 
 def save_checkpoint(
@@ -36,6 +54,7 @@ def save_checkpoint(
     official_test_hash: str | None = None,
     git_commit: str | None = None,
     best_dev_epoch: int | None = None,
+    training_epoch: int | None = None,
     final_fit_epoch: int | None = None,
     final_metrics: dict[str, Any] | None = None,
 ) -> None:
@@ -65,17 +84,20 @@ def save_checkpoint(
         "decision_threshold": config.decision_threshold,
         "confidence_threshold": config.confidence_threshold,
         "temperature": config.temperature if config.temperature is not None else 1.0,
+        "max_length": config.max_length,
+        "truncation_strategy": config.truncation_strategy,
         "preprocessing_contract": {
             "tokenizer_version": TOKENIZER_VERSION,
             "max_length": config.max_length,
             "truncation_strategy": config.truncation_strategy,
         },
-        "git_commit": git_commit or "unspecified",
-        "python_version": __import__("platform").python_version(),
+        "git_commit": git_commit or resolve_git_commit(),
+        "python_version": platform.python_version(),
         "torch_version": str(torch.__version__),
         "test_protocol": "imdb-official-v1",
         "final_fit_epoch": final_fit_epoch,
         "best_dev_epoch": best_dev_epoch,
+        "training_epoch": training_epoch,
         "final_metrics": final_metrics or {},
         # Lưu state CPU để artifact có thể chuyển máy/GPU an toàn.
         "model_state": {key: value.detach().cpu() for key, value in model.state_dict().items()},
@@ -163,7 +185,11 @@ def save_reliability_diagram(
     for i in range(n_bins):
         lower = bin_boundaries[i]
         upper = bin_boundaries[i + 1]
-        mask = (y_prob >= lower) & (y_prob <= upper) if i == n_bins - 1 else (y_prob >= lower) & (y_prob < upper)
+        mask = (
+            (y_prob >= lower) & (y_prob <= upper)
+            if i == n_bins - 1
+            else (y_prob >= lower) & (y_prob < upper)
+        )
         if np.sum(mask) > 0:
             bin_confs.append(float(np.mean(y_prob[mask])))
             bin_accs.append(float(np.mean(y_true[mask])))

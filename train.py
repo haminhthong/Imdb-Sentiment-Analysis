@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
         "--truncation-strategy",
         choices=["first", "head_tail"],
         default="head_tail",
-        help="Chiến lược cắt chuỗi ('first' hoặc 'head_tail'). Mặc định là 'first'.",
+        help="Chiến lược cắt chuỗi ('first' hoặc 'head_tail'). Mặc định là 'head_tail'.",
     )
     parser.add_argument(
         "--seed",
@@ -134,6 +134,23 @@ def main() -> None:
     )
     loss_function = torch.nn.BCEWithLogitsLoss()
 
+    def save_last_checkpoint(epoch, _train_metrics, _validation_metrics) -> None:
+        """Lưu trạng thái epoch cuối để phục vụ resume/debug, tách khỏi best_dev."""
+        save_checkpoint(
+            output_dir / "last.ckpt",
+            model,
+            data.vocabulary,
+            config,
+            training_data_hash=data.audit.get("train_data_hash"),
+            checkpoint_kind="last",
+            model_version="1.0.0-dev",
+            source_dataset_hash=data.audit.get("source_train_hash"),
+            train_split_hash=data.audit.get("train_data_hash"),
+            validation_split_hash=data.audit.get("validation_data_hash"),
+            calibration_split_hash=data.audit.get("calibration_data_hash"),
+            training_epoch=epoch,
+        )
+
     # 3. Huấn luyện mô hình
     print("3/4. Tien hanh huan luyen voi Early Stopping...")
     history = train_model(
@@ -145,6 +162,7 @@ def main() -> None:
         device=device,
         epochs=config.epochs,
         patience=config.patience,
+        on_epoch_end=save_last_checkpoint,
     )
 
     # 4. Chỉ đánh giá Validation để chọn model/epoch; calibration để release step.

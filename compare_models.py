@@ -5,7 +5,7 @@ Quy trình chuẩn hóa:
 2. Đo lường số tham số và độ trễ CPU latency (ms/sample).
 3. Áp dụng Champion Selection Policy (Primary: Validation Macro-F1; Guardrails: Log-Loss, latency, simplicity).
 4. Xuất báo cáo `artifacts/development_leaderboard.md`.
-5. Đóng băng mô hình Champion để chuẩn bị đánh giá Official Test duy nhất 1 lần bằng `evaluate_final.py`.
+5. Đóng băng mô hình Champion để chuẩn bị đánh giá Official Test duy nhất 1 lần bằng `scripts.evaluate_release`.
 """
 
 import argparse
@@ -149,6 +149,11 @@ def create_markdown(rows: list[dict]) -> str:
 
 def create_leaderboard_markdown(rows: list[dict], champion: dict, reason: str) -> str:
     """Tạo bảng Markdown báo cáo Development Leaderboard và Champion."""
+    release_command = (
+        "python -m scripts.package_baseline_release && python -m scripts.evaluate_release"
+        if champion["model"] == "BASELINE"
+        else "python -m scripts.final_fit && python -m scripts.calibrate && python -m scripts.evaluate_release"
+    )
     lines = [
         "# 🏆 Development Validation Leaderboard",
         "",
@@ -175,17 +180,19 @@ def create_leaderboard_markdown(rows: list[dict], champion: dict, reason: str) -
             f"{latency_str} | {champ_tag} |"
         )
 
-    lines.extend([
-        "",
-        "## 🎯 Quyết Định Lựa Chọn Champion (Champion Selection Policy)",
-        f"- **Mô hình được chọn làm Champion:** `{champion['model']}`",
-        f"- **Lý do lựa chọn:** {reason}",
-        f"- **Bước tiếp theo:** Đóng băng toàn bộ checkpoint của `{champion['model']}` và chỉ mở tập Official Test một lần duy nhất với lệnh:",
-        f"  ```bash",
-        "  python -m scripts.final_fit && python -m scripts.calibrate && python -m scripts.evaluate_release",
-        f"  ```",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## 🎯 Quyết Định Lựa Chọn Champion (Champion Selection Policy)",
+            f"- **Mô hình được chọn làm Champion:** `{champion['model']}`",
+            f"- **Lý do lựa chọn:** {reason}",
+            f"- **Bước tiếp theo:** Đóng băng toàn bộ checkpoint của `{champion['model']}` và chỉ mở tập Official Test một lần duy nhất với lệnh:",
+            "  ```bash",
+            f"  {release_command}",
+            "  ```",
+            "",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -232,11 +239,26 @@ def main() -> None:
 
     if not rows:
         print(f"[!] Chưa tìm thấy kết quả huấn luyện nào trong {artifact_root.resolve()}.")
-        print("Hãy huấn luyện baseline và các mô hình trước: python baseline.py && python train.py --model bilstm")
+        print(
+            "Hãy huấn luyện baseline và các mô hình trước: python baseline.py && python train.py --model bilstm"
+        )
         return
 
     champion, reason = select_champion(rows)
     md_content = create_leaderboard_markdown(rows, champion, reason)
+
+    (artifact_root / "champion.json").write_text(
+        json.dumps(
+            {
+                "model": champion["model"],
+                "reason": reason,
+                "validation_rows": rows,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

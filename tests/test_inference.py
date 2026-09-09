@@ -1,14 +1,17 @@
 """Kiểm thử tự động cho module suy luận inference.py."""
 
 import pytest
+import joblib
 
 torch = pytest.importorskip("torch")
 
 from sentiment.artifacts import save_checkpoint
 from sentiment.config import ExperimentConfig
-from sentiment.inference import SentimentPredictor
+from sentiment.inference import SentimentPredictor, load_predictor
 from sentiment.model import SentimentRNN
 from sentiment.text import build_vocabulary
+
+from baseline import create_pipeline
 
 
 def test_predictor_bao_loi_khi_checkpoint_khong_ton_tai(tmp_path):
@@ -33,3 +36,16 @@ def test_predictor_du_doan_don_va_batch(tmp_path):
     assert len(batch_results) == 2
 
 
+def test_load_predictor_ho_tro_baseline_joblib(tmp_path):
+    pipeline = create_pipeline(max_features=100)
+    pipeline.fit(["good movie", "bad movie"], [1, 0])
+    model_path = tmp_path / "model.joblib"
+    joblib.dump(pipeline, model_path)
+
+    predictor = load_predictor(model_path)
+    result = predictor.predict("good movie")
+
+    assert predictor.config.model_type == "tfidf_logistic_regression"
+    assert predictor.count_parameters() > 0
+    assert result.label in {"Positive", "Negative"}
+    assert result.truncated is False

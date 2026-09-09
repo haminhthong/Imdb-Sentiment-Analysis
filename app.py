@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from sentiment.inference import SentimentPredictor
+from sentiment.inference import Predictor, load_predictor as load_model
 
 CHECKPOINT_PATH = os.getenv("CHECKPOINT_PATH", "artifacts/releases/v1.0.0/model.pt")
 ARTIFACT_DIR = Path(CHECKPOINT_PATH).parent
@@ -28,9 +28,9 @@ st.set_page_config(
 
 
 @st.cache_resource
-def load_predictor(path: str) -> SentimentPredictor:
-    """Nạp và caching đối tượng SentimentPredictor để tối ưu hiệu năng."""
-    return SentimentPredictor(path, device="cpu")
+def load_predictor(path: str) -> Predictor:
+    """Nạp và caching model.pt hoặc model.joblib để tối ưu hiệu năng."""
+    return load_model(path, device="cpu")
 
 
 def show_unexpected_error(context: str) -> None:
@@ -61,7 +61,9 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 🏛 9 Giai Đoạn Canonical")
-    st.markdown("1. Data Ingestion\n2. Quality & Anti-Leakage\n3. Dev Split (Test locked)\n4. Train-Only Text Contract\n5. Model Development\n6. Calibration Layer\n7. Locked Final Test\n8. Model Packaging (v2)\n9. Online Serving")
+    st.markdown(
+        "1. Data Ingestion\n2. Quality & Anti-Leakage\n3. Dev Split (Test locked)\n4. Train-Only Text Contract\n5. Model Development\n6. Calibration Layer\n7. Locked Final Test\n8. Model Packaging (v3)\n9. Online Serving"
+    )
 
 
 # Tiêu đề ứng dụng
@@ -215,7 +217,7 @@ with tab_info:
         st.markdown("---")
 
     # Hiển thị Locked Final Test Report nếu có
-    final_test_file = Path("artifacts/final_test_report.md")
+    final_test_file = ARTIFACT_DIR / "final_test_report.md"
     if final_test_file.is_file():
         st.markdown("### 🔒 Locked Final Test Report (Champion Only)")
         st.markdown(final_test_file.read_text(encoding="utf-8"))
@@ -235,6 +237,8 @@ with tab_info:
 
     with chart_col2:
         if cm_img.is_file():
-            st.image(str(cm_img), caption="Ma trận nhầm lẫn (Confusion Matrix)", use_column_width=True)
+            st.image(
+                str(cm_img), caption="Ma trận nhầm lẫn (Confusion Matrix)", use_column_width=True
+            )
         else:
             st.info("Chưa có đồ thị confusion_matrix.png.")

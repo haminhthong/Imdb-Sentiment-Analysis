@@ -28,9 +28,7 @@ class SentimentRNN(nn.Module):
         bidirectional (bool): Cờ đánh dấu mô hình có phải hai chiều (BiLSTM) hay không.
     """
 
-    def __init__(
-        self, vocabulary_size: int, padding_index: int, config: ExperimentConfig
-    ) -> None:
+    def __init__(self, vocabulary_size: int, padding_index: int, config: ExperimentConfig) -> None:
         """Khởi tạo các lớp mạng neural theo cấu hình ExperimentConfig.
 
         Args:
@@ -96,5 +94,3 @@ class SentimentRNN(nn.Module):
             int: Số lượng tham số cần tối ưu hóa.
         """
         return sum(param.numel() for param in self.parameters() if param.requires_grad)
-
-

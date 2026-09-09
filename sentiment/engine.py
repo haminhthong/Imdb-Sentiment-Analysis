@@ -8,7 +8,7 @@ Module này chứa các hàm thực thi cốt lõi cho quá trình học của m
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -87,6 +87,7 @@ def train_model(
     device: torch.device,
     epochs: int,
     patience: int,
+    on_epoch_end: Callable[[int, EpochMetrics, EpochMetrics], None] | None = None,
 ) -> dict[str, Any]:
     """Huấn luyện và early-stop chỉ dựa trên Validation Loss.
 
@@ -105,12 +106,8 @@ def train_model(
     best_epoch = 0
 
     for epoch in range(1, epochs + 1):
-        train_metrics = run_epoch(
-            model, train_loader, loss_function, device, optimizer
-        )
-        validation_metrics = run_epoch(
-            model, validation_loader, loss_function, device
-        )
+        train_metrics = run_epoch(model, train_loader, loss_function, device, optimizer)
+        validation_metrics = run_epoch(model, validation_loader, loss_function, device)
 
         history["train_loss"].append(train_metrics.loss)
         history["train_accuracy"].append(train_metrics.accuracy)
@@ -122,6 +119,9 @@ def train_model(
             f"Train Loss={train_metrics.loss:.4f}, Acc={train_metrics.accuracy:.2%} | "
             f"Val Loss={validation_metrics.loss:.4f}, Acc={validation_metrics.accuracy:.2%}"
         )
+
+        if on_epoch_end is not None:
+            on_epoch_end(epoch, train_metrics, validation_metrics)
 
         # Kiểm tra điều kiện lưu mô hình tốt nhất
         if validation_metrics.loss < best_loss:

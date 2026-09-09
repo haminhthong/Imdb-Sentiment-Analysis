@@ -11,4 +11,3 @@ def test_config_tu_choi_ty_le_validation_khong_hop_le():
 def test_config_tu_choi_batch_size_am():
     with pytest.raises(ValueError, match="batch_size"):
         ExperimentConfig(batch_size=-1)
-

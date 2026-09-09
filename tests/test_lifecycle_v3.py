@@ -26,7 +26,7 @@ def test_development_bundle_has_three_roles_and_no_test(tmp_path):
     bundle = create_data_bundle(path, ExperimentConfig(min_frequency=1))
 
     assert bundle.sizes == {"train": 16, "validation": 2, "calibration": 2}
-    assert bundle.test is None
+    assert not hasattr(bundle, "test")
     assert "test" not in bundle.audit
     assert bundle.audit["vocabulary_scope"] == "train_only"
 
@@ -42,9 +42,7 @@ def test_small_development_dataset_still_has_three_nonempty_roles(tmp_path):
 
 def test_official_test_overlap_fails_without_modifying_frame():
     train = pd.DataFrame({"text": ["Same review"], "label": [1]})
-    official_test = pd.DataFrame(
-        {"text": ["same review", "Independent review"], "label": [1, 0]}
-    )
+    official_test = pd.DataFrame({"text": ["same review", "Independent review"], "label": [1, 0]})
     original = official_test.copy(deep=True)
     with pytest.raises(ValueError, match="DATASET AUDIT FAILED"):
         validate_official_test_independence(train, official_test)

@@ -3,7 +3,7 @@
 ## 1. Tổng Quan Mô Hình (Model Overview)
 - **Tên mô hình:** CineSentiment — Calibrated BiLSTM Sentiment Service.
 - **Kiến trúc production:** TF-IDF + Logistic Regression là baseline; BiLSTM là target model. LSTM/GRU chỉ nằm trong legacy experiments.
-- **Cấu hình thực thi:** Release bundle `artifacts/releases/v1.0.0/model.pt` với `word-regex-v2` tokenizer contract.
+- **Cấu hình thực thi mặc định:** Release bundle `artifacts/releases/v1.0.0/model.pt` với `word-regex-v2` tokenizer contract; nếu validation gate chọn baseline, bundle dùng `model.joblib` nhưng vẫn qua cùng serving contract.
 - **Nhiệm vụ:** Phân loại cảm xúc nhị phân của câu đánh giá phim tiếng Anh thành `Positive` hoặc `Negative`.
 
 ## 2. Mục Đích Sử Dụng (Intended Use)
@@ -33,7 +33,7 @@
 
 ## 5. Giao Thức Đánh Giá Độc Lập (Evaluation Protocol)
 - **Loại bỏ Test Peeking:** Quá trình ứng viên chỉ lưu `validation_metrics.json`. `compare_models.py` tổng hợp Development Leaderboard từ Validation để chọn Champion.
-- **Locked Final Test:** Chỉ có mô hình Champion được mở tập Test chính thức đúng **1 LẦN DUY NHẤT** thông qua `evaluate_final.py`.
+  - **Locked Final Test:** Chỉ có mô hình Champion được mở tập Test chính thức đúng **1 LẦN DUY NHẤT** thông qua `python -m scripts.evaluate_release`.
 
 ## 6. Hạn Chế & Giảm Thiểu Rủi Ro (Limitations & Mitigations)
 - **Cấu trúc ngôn ngữ phức tạp:** Có thể hiểu nhầm câu mỉa mai (sarcasm) hoặc câu có cảm xúc hỗn hợp/đảo chiều ở đoạn kết.
@@ -42,5 +42,5 @@
 - **Độ tin cậy từ vựng:** Cung cấp cảnh báo `HIGH_OOV_WARNING` khi tỷ lệ từ ngoài từ điển vượt quá 20%.
 
 ## 7. Khả Năng Tái Lập (Reproducibility)
-- Release checkpoint tuân thủ **Artifact Schema Version 3**, tích hợp: `model_state`, `vocabulary`, `config`, `temperature`, `confidence_threshold`, tokenizer contract, vocabulary hash, source/split hashes, version và final-fit metadata.
+- Release checkpoint/model bundle tuân thủ **Artifact Schema Version 3**, tích hợp metadata policy, source/split hashes, version và final-fit metadata; RNN lưu `model_state`/`vocabulary`, còn baseline lưu pipeline `model.joblib` và validation/explainability facts.
 - Cố định seed ngẫu nhiên cho Python, NumPy và PyTorch cuDNN deterministic.

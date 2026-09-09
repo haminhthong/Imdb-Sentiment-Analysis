@@ -36,7 +36,9 @@ def main() -> None:
 
     dev_checkpoint: dict[str, Any] = torch.load(dev_path, map_location="cpu", weights_only=True)
     config = ExperimentConfig(**dev_checkpoint["config"])
-    best_epoch = int(dev_checkpoint.get("best_dev_epoch") or dev_checkpoint.get("final_fit_epoch") or 0)
+    best_epoch = int(
+        dev_checkpoint.get("best_dev_epoch") or dev_checkpoint.get("final_fit_epoch") or 0
+    )
     if best_epoch <= 0:
         raise ValueError("Development checkpoint thiếu best_epoch hợp lệ để final fit.")
 

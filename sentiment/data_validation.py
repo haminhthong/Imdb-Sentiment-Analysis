@@ -25,7 +25,7 @@ def load_dataset(path: str | Path, *, deduplicate: bool = True) -> pd.DataFrame:
 
     Quy trình kiểm tra chất lượng dữ liệu:
     - Xác thực sự tồn tại của tệp và các cột bắt buộc ('text', 'label').
-    - Loại bỏ giá trị khuyết thiếu (NaN) và ép kiểu văn bản.
+    - Từ chối giá trị khuyết thiếu (NaN) để không âm thầm đổi kích thước split.
     - Kiểm tra nhãn nhị phân hợp lệ {0, 1}.
     - Bắt lỗi nhãn mâu thuẫn trên raw text và canonical normalized text.
     - Với ``deduplicate=True`` (mặc định), loại duplicate nội bộ theo normalized
@@ -48,8 +48,12 @@ def load_dataset(path: str | Path, *, deduplicate: bool = True) -> pd.DataFrame:
         columns = ", ".join(sorted(missing_columns))
         raise ValueError(f"Thiếu cột bắt buộc trong tệp CSV: {columns}")
 
-    frame = frame.loc[:, ["text", "label"]].dropna().copy()
+    frame = frame.loc[:, ["text", "label"]].copy()
+    if frame.isna().any().any():
+        raise ValueError("Dữ liệu chứa giá trị khuyết thiếu ở cột text hoặc label.")
     frame["text"] = frame["text"].astype(str)
+    if (frame["text"].str.strip() == "").any():
+        raise ValueError("Cột text không được chứa văn bản rỗng.")
     if not set(frame["label"].unique()).issubset({0, 1}):
         raise ValueError("Cột label chỉ được chứa giá trị 0 hoặc 1.")
 
@@ -64,9 +68,7 @@ def load_dataset(path: str | Path, *, deduplicate: bool = True) -> pd.DataFrame:
 
     norm_label_counts = frame.groupby("_norm_hash")["label"].nunique()
     if (norm_label_counts > 1).any():
-        raise ValueError(
-            "Phát hiện normalized exact duplicate nhưng có nhãn mâu thuẫn."
-        )
+        raise ValueError("Phát hiện normalized exact duplicate nhưng có nhãn mâu thuẫn.")
 
     frame["label"] = frame["label"].astype("float32")
 
@@ -92,9 +94,7 @@ def load_official_dataset(path: str | Path) -> pd.DataFrame:
     return load_dataset(path, deduplicate=False)
 
 
-def compute_split_overlap(
-    left_frame: pd.DataFrame, right_frame: pd.DataFrame
-) -> dict[str, int]:
+def compute_split_overlap(left_frame: pd.DataFrame, right_frame: pd.DataFrame) -> dict[str, int]:
     """Đếm raw exact và normalized exact overlap giữa hai split.
 
     ``normalized_exact`` chỉ là duplicate sau canonical tokenizer, không phải
@@ -102,9 +102,7 @@ def compute_split_overlap(
     similarity và nằm ngoài phạm vi v1.
     """
     left_raw = set(left_frame["text"])
-    right_raw = set(right_frame["text"])
     left_norm = set(left_frame["text"].map(compute_normalized_text_hash))
-    right_norm = set(right_frame["text"].map(compute_normalized_text_hash))
     raw_overlap = right_frame["text"].isin(left_raw)
     norm_overlap = right_frame["text"].map(compute_normalized_text_hash).isin(left_norm)
     return {
@@ -131,33 +129,6 @@ def validate_official_test_independence(
             "Không tự động xóa mẫu khỏi Official Test."
         )
     return overlap
-
-
-def remove_train_test_overlap(
-    train_frame: pd.DataFrame, test_frame: pd.DataFrame
-) -> pd.DataFrame:
-    """Compatibility helper cũ để xử lý dữ liệu không phải Official Test.
-
-    Hàm này giữ lại để notebook cũ không hỏng. Release evaluator không gọi hàm
-    này; nó dùng ``validate_official_test_independence`` và fail-fast.
-    """
-    train_raw_set = set(train_frame["text"])
-    train_norm_hashes = set(train_frame["text"].apply(compute_normalized_text_hash))
-
-    test_norm_hashes = test_frame["text"].apply(compute_normalized_text_hash)
-
-    # Lọc mẫu test không thuộc train_raw_set và normalized hash không thuộc train_norm_hashes
-    is_raw_leak = test_frame["text"].isin(train_raw_set)
-    is_norm_leak = test_norm_hashes.isin(train_norm_hashes)
-    is_clean = ~(is_raw_leak | is_norm_leak)
-
-    clean_test = test_frame.loc[is_clean].copy()
-    if clean_test.empty:
-        raise ValueError(
-            "Tập test không còn mẫu độc lập nào sau khi loại dữ liệu trùng với train."
-        )
-
-    return clean_test.reset_index(drop=True)
 
 
 def compute_token_length_distribution(

@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from sentiment.data_validation import load_dataset, remove_train_test_overlap
+from sentiment.data_validation import load_dataset, validate_official_test_independence
 
 
 def test_load_dataset_tu_choi_nhan_mau_thuan(tmp_path):
@@ -13,9 +13,10 @@ def test_load_dataset_tu_choi_nhan_mau_thuan(tmp_path):
         load_dataset(path)
 
 
-def test_remove_overlap_bao_loi_khi_test_khong_con_mau():
+def test_official_test_overlap_fail_fast_and_keeps_frame_immutable():
     train = pd.DataFrame({"text": ["Same"], "label": [1]})
     test = pd.DataFrame({"text": ["Same"], "label": [1]})
-    with pytest.raises(ValueError, match="không còn mẫu độc lập"):
-        remove_train_test_overlap(train, test)
-
+    original = test.copy(deep=True)
+    with pytest.raises(ValueError, match="DATASET AUDIT FAILED"):
+        validate_official_test_independence(train, test)
+    pd.testing.assert_frame_equal(test, original)
