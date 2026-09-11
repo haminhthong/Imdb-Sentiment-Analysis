@@ -3,7 +3,8 @@
 Module này cung cấp các chức năng:
 1. Ghi PyTorch Checkpoint (`model.pt`) theo Artifact Schema Version 3 (metadata phong phú).
 2. Ghi tệp JSON báo cáo (`validation_metrics.json`, `test_metrics.json`, `history.json`).
-3. Vẽ và lưu đồ thị huấn luyện (Loss/Accuracy), Ma trận nhầm lẫn và Biểu đồ độ tin cậy (Reliability Diagram).
+3. Vẽ và lưu đồ thị huấn luyện (Loss/Accuracy), Ma trận nhầm lẫn và Biểu đồ
+   độ tin cậy (Reliability Diagram).
 """
 
 import json

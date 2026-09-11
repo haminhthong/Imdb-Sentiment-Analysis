@@ -1,11 +1,14 @@
 """Tổng hợp và so sánh kết quả Validation của các mô hình thành Development Leaderboard.
 
 Quy trình chuẩn hóa:
-1. Đọc tệp `validation_metrics.json` từ các thư mục thí nghiệm (`baseline`, `lstm`, `gru`, `bilstm`).
+1. Đọc tệp `validation_metrics.json` từ các thư mục thí nghiệm
+   (`baseline`, `lstm`, `gru`, `bilstm`).
 2. Đo lường số tham số và độ trễ CPU latency (ms/sample).
-3. Áp dụng Champion Selection Policy (Primary: Validation Macro-F1; Guardrails: Log-Loss, latency, simplicity).
+3. Áp dụng Champion Selection Policy (Primary: Validation Macro-F1;
+   Guardrails: Log-Loss, latency, simplicity).
 4. Xuất báo cáo `artifacts/development_leaderboard.md`.
-5. Đóng băng mô hình Champion để chuẩn bị đánh giá Official Test duy nhất 1 lần bằng `scripts.evaluate_release`.
+5. Đóng băng mô hình Champion để chuẩn bị đánh giá Official Test duy nhất 1 lần
+   bằng `scripts.evaluate_release`.
 """
 
 import argparse
@@ -152,15 +155,21 @@ def create_leaderboard_markdown(rows: list[dict], champion: dict, reason: str) -
     release_command = (
         "python -m scripts.package_baseline_release && python -m scripts.evaluate_release"
         if champion["model"] == "BASELINE"
-        else "python -m scripts.final_fit && python -m scripts.calibrate && python -m scripts.evaluate_release"
+        else (
+            "python -m scripts.final_fit && python -m scripts.calibrate && "
+            "python -m scripts.evaluate_release"
+        )
     )
     lines = [
         "# 🏆 Development Validation Leaderboard",
         "",
-        "> **Giao thức chuẩn (Leakage-Safe Protocol):** Bảng này được xây dựng **100% từ tập Validation**.",
-        "> Tuyệt đối không sử dụng tập Test để so sánh hay chọn mô hình, nhằm tránh rò rỉ dữ liệu (Test Peeking).",
+        "> **Giao thức chuẩn (Leakage-Safe Protocol):** Bảng này được xây dựng "
+        "**100% từ tập Validation**.",
+        "> Tuyệt đối không sử dụng tập Test để so sánh hay chọn mô hình, nhằm "
+        "tránh rò rỉ dữ liệu (Test Peeking).",
         "",
-        "| Candidate Model | Parameters | Val Loss | Val Acc | Val Macro-F1 | Val ROC-AUC | Val ECE | CPU Latency | Champion Status |",
+        "| Candidate Model | Parameters | Val Loss | Val Acc | Val Macro-F1 | "
+        "Val ROC-AUC | Val ECE | CPU Latency | Champion Status |",
         "|---|---:|---:|---:|---:|---:|---:|---:|:---:|",
     ]
 
@@ -186,7 +195,9 @@ def create_leaderboard_markdown(rows: list[dict], champion: dict, reason: str) -
             "## 🎯 Quyết Định Lựa Chọn Champion (Champion Selection Policy)",
             f"- **Mô hình được chọn làm Champion:** `{champion['model']}`",
             f"- **Lý do lựa chọn:** {reason}",
-            f"- **Bước tiếp theo:** Đóng băng toàn bộ checkpoint của `{champion['model']}` và chỉ mở tập Official Test một lần duy nhất với lệnh:",
+            f"- **Bước tiếp theo:** Đóng băng toàn bộ checkpoint của "
+            f"`{champion['model']}` và chỉ mở tập Official Test một lần duy nhất "
+            "với lệnh:",
             "  ```bash",
             f"  {release_command}",
             "  ```",
@@ -240,7 +251,8 @@ def main() -> None:
     if not rows:
         print(f"[!] Chưa tìm thấy kết quả huấn luyện nào trong {artifact_root.resolve()}.")
         print(
-            "Hãy huấn luyện baseline và các mô hình trước: python baseline.py && python train.py --model bilstm"
+            "Hãy huấn luyện baseline và các mô hình trước: "
+            "python baseline.py && python train.py --model bilstm"
         )
         return
 

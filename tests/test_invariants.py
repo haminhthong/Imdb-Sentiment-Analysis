@@ -3,8 +3,7 @@
 import numpy as np
 import pandas as pd
 import pytest
-
-torch = pytest.importorskip("torch")
+import torch
 
 from sentiment.artifacts import save_checkpoint
 from sentiment.calibration import DecisionPolicy, TemperatureScaler
@@ -42,7 +41,7 @@ def test_raw_duplicate_removed(tmp_path):
 
 
 def test_normalized_duplicate_removed(tmp_path):
-    """Bất biến 3: Dữ liệu trùng lặp chuẩn hóa (Normalized duplicate) hoa/thường, HTML phải bị loại."""
+    """Bất biến 3: Dữ liệu trùng lặp chuẩn hóa phải bị loại."""
     csv_file = tmp_path / "data.csv"
     df = pd.DataFrame(
         {

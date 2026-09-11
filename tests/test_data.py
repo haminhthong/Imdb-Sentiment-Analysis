@@ -2,8 +2,7 @@
 
 import pandas as pd
 import pytest
-
-torch = pytest.importorskip("torch")
+import torch
 
 from sentiment.config import ExperimentConfig
 from sentiment.data import IMDBDataset, create_data_bundle

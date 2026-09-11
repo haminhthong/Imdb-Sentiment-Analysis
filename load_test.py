@@ -54,8 +54,7 @@ def main() -> None:
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=args.users) as executor:
         futures = [
-            executor.submit(send_request, args.url, args.timeout)
-            for _ in range(args.requests)
+            executor.submit(send_request, args.url, args.timeout) for _ in range(args.requests)
         ]
         results = [future.result() for future in as_completed(futures)]
     elapsed = time.perf_counter() - started

@@ -37,7 +37,7 @@ def compute_log_loss_score(y_true: np.ndarray, y_prob: np.ndarray, eps: float = 
 
 
 def compute_ece(y_true: np.ndarray, y_prob: np.ndarray, n_bins: int = 10) -> float:
-    """Tính Expected Calibration Error (ECE) với phân chia đều các khoảng xác suất (Equal-width binning).
+    """Tính Expected Calibration Error (ECE) với phân chia đều các khoảng xác suất.
 
     ECE đo lường khoảng cách trung bình có trọng số giữa độ tin cậy và độ chính xác thực tế:
         ECE = sum_m (|B_m| / N) * |acc(B_m) - conf(B_m)|

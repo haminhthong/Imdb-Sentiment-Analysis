@@ -78,12 +78,8 @@ class SentimentRNN(nn.Module):
         # Lấy hidden state cuối cùng (LSTM trả về tuple (h, c), GRU trả về h)
         hidden = output[1][0] if isinstance(output[1], tuple) else output[1]
 
-        if self.bidirectional:
-            # Ghép hidden state của chiều tiến (layer cuối) và chiều lùi (layer cuối)
-            features = torch.cat((hidden[-2], hidden[-1]), dim=1)
-        else:
-            # Lấy hidden state của layer cuối cùng
-            features = hidden[-1]
+        # Ghép hidden state hai chiều hoặc lấy hidden state của layer cuối.
+        features = torch.cat((hidden[-2], hidden[-1]), dim=1) if self.bidirectional else hidden[-1]
 
         return self.classifier(features).squeeze(1)
 

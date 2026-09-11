@@ -1,7 +1,8 @@
 """Giao diện Web Demo đa năng cho CineSentiment Platform sử dụng Streamlit.
 
 Ứng dụng cung cấp 3 tab tương tác:
-1. Tab 1: Phân tích đánh giá đơn (Single Review) với xác suất hiệu chuẩn, vùng bất định và kiểm toán token.
+1. Tab 1: Phân tích đánh giá đơn (Single Review) với xác suất hiệu chuẩn,
+   vùng bất định và kiểm toán token.
 2. Tab 2: Phân tích theo lô (Batch Processing) kèm cờ cảnh báo rủi ro độ tin cậy.
 3. Tab 3: Sơ đồ 9 giai đoạn chuẩn mực, Development Leaderboard và Báo cáo Locked Final Test.
 """
@@ -13,7 +14,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from sentiment.inference import Predictor, load_predictor as load_model
+from sentiment.inference import Predictor
+from sentiment.inference import load_predictor as load_model
 
 CHECKPOINT_PATH = os.getenv("CHECKPOINT_PATH", "artifacts/releases/v1.0.0/model.pt")
 ARTIFACT_DIR = Path(CHECKPOINT_PATH).parent
@@ -62,7 +64,15 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🏛 9 Giai Đoạn Canonical")
     st.markdown(
-        "1. Data Ingestion\n2. Quality & Anti-Leakage\n3. Dev Split (Test locked)\n4. Train-Only Text Contract\n5. Model Development\n6. Calibration Layer\n7. Locked Final Test\n8. Model Packaging (v3)\n9. Online Serving"
+        "1. Data Ingestion\n"
+        "2. Quality & Anti-Leakage\n"
+        "3. Dev Split (Test locked)\n"
+        "4. Train-Only Text Contract\n"
+        "5. Model Development\n"
+        "6. Calibration Layer\n"
+        "7. Locked Final Test\n"
+        "8. Model Packaging (v3)\n"
+        "9. Online Serving"
     )
 
 
@@ -159,7 +169,11 @@ with tab_batch:
 
     batch_input = st.text_area(
         "Danh sách câu đánh giá:",
-        placeholder="Awesome movie with stunning visuals!\nAwful script and boring actors.\nNot bad at all, quite entertaining.",
+        placeholder=(
+            "Awesome movie with stunning visuals!\n"
+            "Awful script and boring actors.\n"
+            "Not bad at all, quite entertaining."
+        ),
         height=200,
     )
 
@@ -186,7 +200,7 @@ with tab_batch:
                         "OOV Rate (used)": f"{res.used_oov_rate:.1%}",
                         "Cảnh Báo": ", ".join(res.warnings) if res.warnings else "None",
                     }
-                    for idx, (text, res) in enumerate(zip(lines, results))
+                    for idx, (text, res) in enumerate(zip(lines, results, strict=True))
                 ]
 
                 df_res = pd.DataFrame(data_records)

@@ -3,11 +3,11 @@
 import pandas as pd
 import pytest
 
+from sentiment.calibration import tune_confidence_threshold
 from sentiment.config import ExperimentConfig
 from sentiment.data import create_data_bundle
 from sentiment.data_validation import validate_official_test_independence
 from sentiment.text import build_vocabulary, encode_with_audit
-from sentiment.calibration import tune_confidence_threshold
 
 
 def _frame(size: int = 20) -> pd.DataFrame:

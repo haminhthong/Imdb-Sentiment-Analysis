@@ -27,7 +27,10 @@ from sentiment.utils import seed_everything, select_device
 def parse_args() -> argparse.Namespace:
     """Cấu hình các tham số dòng lệnh CLI."""
     parser = argparse.ArgumentParser(
-        description="Huấn luyện mô hình phân loại cảm xúc CineSentiment AI dưới giao thức Validation an toàn"
+        description=(
+            "Huấn luyện mô hình phân loại cảm xúc CineSentiment AI "
+            "dưới giao thức Validation an toàn"
+        )
     )
     parser.add_argument(
         "--model",

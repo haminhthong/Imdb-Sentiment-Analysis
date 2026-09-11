@@ -41,10 +41,7 @@ def main() -> None:
 
     # Kiểm tra xem input có phải là file text không
     input_path = Path(args.text)
-    if input_path.is_file():
-        text = input_path.read_text(encoding="utf-8").strip()
-    else:
-        text = args.text
+    text = input_path.read_text(encoding="utf-8").strip() if input_path.is_file() else args.text
 
     device = select_device(args.device)
     predictor = load_predictor(args.checkpoint, str(device))

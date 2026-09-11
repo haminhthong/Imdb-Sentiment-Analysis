@@ -3,7 +3,8 @@
 Đây là script DUY NHẤT trong toàn bộ platform được phép mở tập Official Test:
 - Khôi phục nguyên vẹn trọng số, từ điển, cấu hình siêu tham số và hệ số hiệu chuẩn Temperature.
 - Đánh giá tập Test đúng 1 lần (Single-pass locked evaluation) để chống rò rỉ và overfit trên test.
-- Báo cáo toàn diện: Accuracy, Macro-F1, ROC-AUC, PR-AUC, Brier Score, ECE và các lát cắt lỗi (Error Slices).
+- Báo cáo toàn diện: Accuracy, Macro-F1, ROC-AUC, PR-AUC, Brier Score, ECE
+  và các lát cắt lỗi (Error Slices).
 """
 
 import argparse
@@ -29,7 +30,6 @@ from sentiment.engine import evaluate_model
 from sentiment.model import SentimentRNN
 from sentiment.text import Vocabulary, encode_with_audit, tokenize
 from sentiment.utils import select_device
-
 
 LINGUISTIC_PATTERNS = {
     "has_negation": re.compile(
@@ -193,7 +193,7 @@ def evaluate_slices(
         "confidence_threshold": confidence_threshold,
         "coverage": round(float(np.mean(accepted)) if len(accepted) else 0.0, 4),
         "accepted_accuracy": round(
-            float(np.mean((preds[accepted] == np.asarray(labels)[accepted])))
+            float(np.mean(preds[accepted] == np.asarray(labels)[accepted]))
             if np.any(accepted)
             else 0.0,
         ),
@@ -228,7 +228,10 @@ def main() -> None:
     parser.add_argument(
         "--model-dir",
         default="artifacts/releases/v1.0.0",
-        help="Thư mục chứa checkpoint mô hình Champion (ví dụ: artifacts/bilstm hoặc artifacts/baseline).",
+        help=(
+            "Thư mục chứa checkpoint mô hình Champion "
+            "(ví dụ: artifacts/bilstm hoặc artifacts/baseline)."
+        ),
     )
     parser.add_argument("--train-data", default="data/raw/train.csv")
     parser.add_argument("--test-data", default="data/raw/test.csv")
@@ -392,11 +395,15 @@ def main() -> None:
         slices_table_rows.append(f"| {k} | {v['samples']:,} | {v['accuracy']:.2%} |")
 
     slices_md = "\n".join(slices_table_rows)
+    true_negative, false_positive = metrics["confusion_matrix"][0]
+    false_negative, true_positive = metrics["confusion_matrix"][1]
+    long_review = metrics["error_slices"]["length_slices"][">256 tokens"]
 
     report_md = f"""# 🔒 Official Locked Final Test Report — {model_name}
 
 > **Chính sách đánh giá (Frozen Test Policy):**
-> Mô hình Champion được khóa chặt cấu hình và chỉ được mở tập Test chính thức đúng **MỘT LẦN DUY NHẤT**.
+> Mô hình Champion được khóa chặt cấu hình và chỉ được mở tập Test chính thức
+> đúng **MỘT LẦN DUY NHẤT**.
 > Không có bất kỳ sự can thiệp hay tinh chỉnh siêu tham số nào trên tập dữ liệu này.
 
 ## 1. Các Chỉ Số Tổng Quan (Core Metrics)
@@ -416,8 +423,8 @@ def main() -> None:
 ## 2. Ma Trận Nhầm Lẫn (Confusion Matrix)
 ```text
                   Predicted Negative    Predicted Positive
-Actual Negative :        {metrics["confusion_matrix"][0][0]:<12}        {metrics["confusion_matrix"][0][1]:<12}
-Actual Positive :        {metrics["confusion_matrix"][1][0]:<12}        {metrics["confusion_matrix"][1][1]:<12}
+Actual Negative :        {true_negative:<12}        {false_positive:<12}
+Actual Positive :        {false_negative:<12}        {true_positive:<12}
 ```
 
 ## 3. Lát Cắt Lỗi Theo Độ Dài Chuỗi (Length Error Slices)
@@ -429,8 +436,10 @@ Actual Positive :        {metrics["confusion_matrix"][1][0]:<12}        {metrics
 - **Official Test hash:** `{compute_dataset_hash(test_frame)}`
 - **Overlap audit:** `{overlap["overlap_count"]}` mẫu
 - **Temperature:** `{metrics.get("temperature", 1.0):.4f}`
-- **Long-review slice accuracy:** `{metrics["error_slices"]["length_slices"][">256 tokens"]["accuracy"]:.2%}` trên `{metrics["error_slices"]["length_slices"][">256 tokens"]["samples"]:,}` mẫu
-- **CPU latency p50/p95:** `{benchmark["latency_p50_ms"]:.2f} / {benchmark["latency_p95_ms"]:.2f}` ms
+- **Long-review slice accuracy:** `{long_review["accuracy"]:.2%}`
+  trên `{long_review["samples"]:,}` mẫu
+- **CPU latency p50/p95:**
+  `{benchmark["latency_p50_ms"]:.2f} / {benchmark["latency_p95_ms"]:.2f}` ms
 - **CPU throughput:** `{benchmark["throughput_samples_per_second"]:.2f}` samples/second
 
 > Báo cáo chỉ xuất số liệu và facts. Kết luận chất lượng cần dựa trên ngưỡng

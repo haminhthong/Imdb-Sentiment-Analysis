@@ -47,7 +47,8 @@ app = FastAPI(
     title=APP_NAME,
     description=(
         "REST API phục vụ phân loại cảm xúc đánh giá phim tiếng Anh "
-        "dưới kiến trúc production-oriented NLP portfolio system với xác suất hiệu chuẩn và kiểm toán đầu vào."
+        "dưới kiến trúc production-oriented NLP portfolio system với xác suất "
+        "hiệu chuẩn và kiểm toán đầu vào."
     ),
     version="2.0.0",
     docs_url="/docs",

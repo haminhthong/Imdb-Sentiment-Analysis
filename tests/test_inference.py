@@ -1,17 +1,14 @@
 """Kiểm thử tự động cho module suy luận inference.py."""
 
-import pytest
 import joblib
+import pytest
 
-torch = pytest.importorskip("torch")
-
+from baseline import create_pipeline
 from sentiment.artifacts import save_checkpoint
 from sentiment.config import ExperimentConfig
 from sentiment.inference import SentimentPredictor, load_predictor
 from sentiment.model import SentimentRNN
 from sentiment.text import build_vocabulary
-
-from baseline import create_pipeline
 
 
 def test_predictor_bao_loi_khi_checkpoint_khong_ton_tai(tmp_path):

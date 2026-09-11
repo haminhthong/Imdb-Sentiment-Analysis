@@ -411,7 +411,8 @@ python -m scripts.create_smoke_dataset
 ```bash
 python -m pytest -q
 python -c "from pathlib import Path; roots=[Path('sentiment'),Path('scripts'),Path('tests')]; files=list(Path('.').glob('*.py'))+[p for root in roots for p in root.rglob('*.py')]; [compile(p.read_text(encoding='utf-8'),str(p),'exec') for p in files]"
-python -m ruff check sentiment train.py baseline.py compare_models.py evaluate_final.py analyze_errors.py scripts tests --select E4,E7,E9,F --ignore E402
+python -m ruff check .
+python -m ruff format --check .
 ```
 
 ### 4. Huấn luyện First-Class Baseline (TF-IDF + Logistic Regression)
@@ -460,9 +461,13 @@ uvicorn api:app --reload --port 8000
 GitHub Actions tại `.github/workflows/quality.yml` chạy trên Python 3.11:
 
 1. cài project cùng dev dependencies từ `pyproject.toml`;
-2. chạy `ruff check` trên source, scripts và tests;
-3. chạy pytest với `addopts` rỗng để CI không phụ thuộc cache local;
-4. chạy compileall để bắt lỗi syntax/import cơ bản.
+2. chạy `ruff check .` trên toàn bộ Python production và tests;
+3. kiểm tra toàn bộ source đã được format bằng `ruff format --check .`;
+4. chạy pytest với `-p no:cacheprovider` để không sinh cache test trong repository;
+5. compile toàn bộ Python source để bắt lỗi cú pháp cơ bản.
+
+`notebooks/legacy/` được giữ làm kho lịch sử và được loại khỏi Ruff bằng cấu hình
+trong `pyproject.toml`; notebook không phải production entrypoint của hệ thống.
 
 Các thư mục sinh ra như `.pytest_tmp/`, `runs/`, `data/raw/`,
 `data/processed/` và artifacts thử nghiệm không được commit. Official CSV chỉ

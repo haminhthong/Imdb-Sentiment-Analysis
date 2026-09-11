@@ -9,8 +9,9 @@ import hashlib
 import html
 import re
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
 TOKENIZER_VERSION = "word-regex-v2"
 

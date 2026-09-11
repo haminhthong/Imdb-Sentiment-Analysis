@@ -311,7 +311,7 @@ class BaselinePredictor:
 
         probabilities = self.pipeline.predict_proba(texts)[:, 1]
         results: list[PredictionResult] = []
-        for text, probability in zip(texts, probabilities):
+        for text, probability in zip(texts, probabilities, strict=True):
             probability = float(probability)
             decision = self.decision_policy.decide(probability)
             warnings = detect_language_warning(text)

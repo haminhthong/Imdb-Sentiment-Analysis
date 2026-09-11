@@ -3,12 +3,14 @@
 Module này chứa các hàm thực thi cốt lõi cho quá trình học của mô hình:
 1. `run_epoch`: Chạy một epoch ở chế độ huấn luyện hoặc đánh giá.
 2. `train_model`: Huấn luyện theo dõi Validation Loss, áp dụng Early Stopping.
-3. `evaluate_model`: Đo lường toàn diện các chỉ số: Loss, Accuracy, Macro-F1, ROC-AUC, PR-AUC, Brier Score, ECE.
+3. `evaluate_model`: Đo lường toàn diện các chỉ số: Loss, Accuracy, Macro-F1,
+   ROC-AUC, PR-AUC, Brier Score, ECE.
 """
 
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import torch
