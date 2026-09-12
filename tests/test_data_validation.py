@@ -13,6 +13,34 @@ def test_load_dataset_tu_choi_nhan_mau_thuan(tmp_path):
         load_dataset(path)
 
 
+def test_raw_duplicate_removed(tmp_path):
+    csv_file = tmp_path / "data.csv"
+    df = pd.DataFrame(
+        {"text": ["A great movie.", "A great movie.", "A terrible movie."], "label": [1, 1, 0]}
+    )
+    df.to_csv(csv_file, index=False)
+    loaded = load_dataset(csv_file)
+    assert len(loaded) == 2
+
+
+def test_normalized_duplicate_removed(tmp_path):
+    csv_file = tmp_path / "data.csv"
+    df = pd.DataFrame(
+        {
+            "text": [
+                "This movie is GREAT!",
+                "this movie is great",
+                "This movie is great.<br /><br />",
+                "Completely different movie.",
+            ],
+            "label": [1, 1, 1, 0],
+        }
+    )
+    df.to_csv(csv_file, index=False)
+    loaded = load_dataset(csv_file)
+    assert len(loaded) == 2
+
+
 def test_official_test_overlap_fail_fast_and_keeps_frame_immutable():
     train = pd.DataFrame({"text": ["Same"], "label": [1]})
     test = pd.DataFrame({"text": ["Same"], "label": [1]})

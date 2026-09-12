@@ -1,23 +1,47 @@
-import numpy as np
 import pandas as pd
 
-from analyze_errors import analyze_linguistic_slices, collect_errors
+from scripts.analyze_errors import NEGATION_PATTERN, analyze_errors_on_dataset
+from sentiment.inference import PredictionResult
 
 
-def test_collect_errors_chi_giu_du_doan_sai_va_sap_xep_confidence():
-    frame = pd.DataFrame({"text": ["a", "b", "c"], "label": [1, 0, 1]})
-    predictions = np.array([0, 1, 1])
-    probabilities = np.array([[0.8, 0.2], [0.1, 0.9], [0.2, 0.8]])
-    errors = collect_errors(frame, predictions, probabilities)
-    assert errors["text"].tolist() == ["b", "a"]
-    assert errors["confidence"].tolist() == [0.9, 0.8]
+class MockPredictor:
+    def predict_batch(self, texts):
+        results = []
+        for t in texts:
+            is_pos = "good" in t
+            results.append(
+                PredictionResult(
+                    label="Positive" if is_pos else "Negative",
+                    probability=0.9 if is_pos else 0.1,
+                    token_count=len(t.split()),
+                    oov_rate=0.0,
+                )
+            )
+        return results
 
 
-def test_linguistic_slices_doc_bool_tu_csv():
-    total = pd.DataFrame({"has_negation": ["False", "True", "False"]})
-    errors = pd.DataFrame({"has_negation": ["True"]})
+def test_analyze_errors_on_dataset():
+    df = pd.DataFrame(
+        {
+            "text": [
+                "a good movie",
+                "not a good movie but bad",
+                "a bad movie",
+                "another good film",
+            ],
+            "label": [1, 0, 0, 1],
+        }
+    )
+    predictor = MockPredictor()
+    report = analyze_errors_on_dataset(predictor, df)
 
-    result = analyze_linguistic_slices(errors, total)
+    assert report["total_samples"] == 4
+    assert "linguistic_slices" in report
+    assert "length_slices" in report
+    assert "oov_slices" in report
 
-    assert result["negation"]["total_matching_samples"] == 1
-    assert result["negation"]["errors_count"] == 1
+
+def test_negation_pattern():
+    assert NEGATION_PATTERN.search("I do not like it")
+    assert NEGATION_PATTERN.search("It isn't good")
+    assert not NEGATION_PATTERN.search("This is good")

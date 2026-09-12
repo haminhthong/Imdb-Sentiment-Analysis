@@ -1,15 +1,6 @@
-"""Quản lý checkpoint training/release, tệp JSON và biểu đồ trực quan.
-
-Module này cung cấp các chức năng:
-1. Ghi PyTorch Checkpoint (`model.pt`) theo Artifact Schema Version 3 (metadata phong phú).
-2. Ghi tệp JSON báo cáo (`validation_metrics.json`, `test_metrics.json`, `history.json`).
-3. Vẽ và lưu đồ thị huấn luyện (Loss/Accuracy), Ma trận nhầm lẫn và Biểu đồ
-   độ tin cậy (Reliability Diagram).
-"""
+"""Quản lý lưu trữ checkpoint mô hình, tệp JSON và biểu đồ trực quan."""
 
 import json
-import platform
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -20,23 +11,7 @@ import torch
 from torch import nn
 
 from .config import ExperimentConfig
-from .text import TOKENIZER_VERSION, Vocabulary
-
-
-def resolve_git_commit() -> str:
-    """Lấy Git SHA hiện tại để artifact có thể truy nguyên về source code."""
-    try:
-        repository = Path(__file__).resolve().parents[1]
-        result = subprocess.run(
-            ["git", "-c", f"safe.directory={repository}", "rev-parse", "HEAD"],
-            cwd=repository,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return result.stdout.strip() or "unspecified"
-    except (OSError, subprocess.CalledProcessError):
-        return "unspecified"
+from .text import Vocabulary
 
 
 def save_checkpoint(
@@ -44,72 +19,25 @@ def save_checkpoint(
     model: nn.Module,
     vocabulary: Vocabulary,
     config: ExperimentConfig,
-    training_data_hash: str | None = None,
-    *,
-    model_version: str = "1.0.0",
-    checkpoint_kind: str = "training",
-    source_dataset_hash: str | None = None,
-    train_split_hash: str | None = None,
-    validation_split_hash: str | None = None,
-    calibration_split_hash: str | None = None,
-    official_test_hash: str | None = None,
-    git_commit: str | None = None,
-    best_dev_epoch: int | None = None,
-    training_epoch: int | None = None,
-    final_fit_epoch: int | None = None,
-    final_metrics: dict[str, Any] | None = None,
+    temperature: float | None = None,
 ) -> None:
-    """Lưu checkpoint PyTorch theo chuẩn Artifact Schema v3.
-
-    Bao gồm đầy đủ trọng số mô hình, từ điển, cấu hình siêu tham số,
-    phiên bản tokenizer, thông số calibration và fingerprint của từng split.
-    """
+    """Lưu checkpoint mô hình tinh gọn gồm trọng số, từ điển, cấu hình và temperature."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    temp_val = temperature if temperature is not None else (config.temperature or 1.0)
+
     checkpoint_payload = {
-        "artifact_schema_version": 3,
-        "schema_version": 3,
-        "model_version": model_version,
-        "checkpoint_kind": checkpoint_kind,
-        "architecture": {"type": config.model_type},
-        "model_type": config.model_type,  # Alias để đọc artifact v2.
-        "tokenizer_version": TOKENIZER_VERSION,
-        "vocabulary_hash": vocabulary.compute_hash(),
-        "training_data_hash": training_data_hash or "unspecified",
-        "source_dataset_hash": source_dataset_hash or "unspecified",
-        "train_split_hash": train_split_hash or training_data_hash or "unspecified",
-        "validation_split_hash": validation_split_hash or "unspecified",
-        "calibration_split_hash": calibration_split_hash or "unspecified",
-        "official_test_hash": official_test_hash or "unspecified",
-        "decision_threshold": config.decision_threshold,
-        "confidence_threshold": config.confidence_threshold,
-        "temperature": config.temperature if config.temperature is not None else 1.0,
-        "max_length": config.max_length,
-        "truncation_strategy": config.truncation_strategy,
-        "preprocessing_contract": {
-            "tokenizer_version": TOKENIZER_VERSION,
-            "max_length": config.max_length,
-            "truncation_strategy": config.truncation_strategy,
-        },
-        "git_commit": git_commit or resolve_git_commit(),
-        "python_version": platform.python_version(),
-        "torch_version": str(torch.__version__),
-        "test_protocol": "imdb-official-v1",
-        "final_fit_epoch": final_fit_epoch,
-        "best_dev_epoch": best_dev_epoch,
-        "training_epoch": training_epoch,
-        "final_metrics": final_metrics or {},
-        # Lưu state CPU để artifact có thể chuyển máy/GPU an toàn.
         "model_state": {key: value.detach().cpu() for key, value in model.state_dict().items()},
         "vocabulary": vocabulary.to_dict(),
         "config": config.to_dict(),
+        "temperature": temp_val,
     }
     torch.save(checkpoint_payload, path)
 
 
 def save_json(path: str | Path, data: Any) -> None:
-    """Ghi dữ liệu dưới dạng tệp JSON định dạng UTF-8 đẹp mắt."""
+    """Ghi dữ liệu ra tệp JSON định dạng UTF-8."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -120,11 +48,11 @@ def save_plots(
     history: dict[str, list[float]],
     confusion: list[list[int]],
 ) -> None:
-    """Vẽ và lưu hai đồ thị: Lịch sử huấn luyện (Loss & Acc) và Confusion Matrix."""
+    """Lưu 2 đồ thị: Lịch sử huấn luyện (Loss & Accuracy) và Ma trận nhầm lẫn (Confusion Matrix)."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Đồ thị 1: Lịch sử Loss và Accuracy theo Epoch
+    # 1. Đồ thị lịch sử huấn luyện
     figure, axes = plt.subplots(1, 2, figsize=(12, 4.5))
 
     axes[0].plot(history["train_loss"], label="Train Loss", color="#1f77b4", linewidth=2)
@@ -147,7 +75,7 @@ def save_plots(
     figure.savefig(output_dir / "training_history.png", dpi=300)
     plt.close(figure)
 
-    # Đồ thị 2: Seaborn Heatmap Ma Trận Nhầm Lẫn (Confusion Matrix)
+    # 2. Confusion Matrix
     figure, axis = plt.subplots(figsize=(5.5, 4.5))
     sns.heatmap(
         confusion,
@@ -175,7 +103,7 @@ def save_reliability_diagram(
     n_bins: int = 10,
     filename: str = "reliability_diagram.png",
 ) -> None:
-    """Vẽ và lưu biểu đồ Reliability Diagram (Calibration Curve) cho đánh giá xác suất."""
+    """Vẽ và lưu Reliability Diagram (Calibration Curve) cho đánh giá xác suất."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

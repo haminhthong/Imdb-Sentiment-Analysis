@@ -1,46 +1,36 @@
-# Model Card — CineSentiment Platform
+# Model Card — CineSentiment
 
-## 1. Tổng Quan Mô Hình (Model Overview)
-- **Tên mô hình:** CineSentiment — Calibrated BiLSTM Sentiment Service.
-- **Kiến trúc production:** TF-IDF + Logistic Regression là baseline; BiLSTM là target model. LSTM/GRU chỉ nằm trong legacy experiments.
-- **Cấu hình thực thi mặc định:** Release bundle `artifacts/releases/v1.0.0/model.pt` với `word-regex-v2` tokenizer contract; nếu validation gate chọn baseline, bundle dùng `model.joblib` nhưng vẫn qua cùng serving contract.
-- **Nhiệm vụ:** Phân loại cảm xúc nhị phân của câu đánh giá phim tiếng Anh thành `Positive` hoặc `Negative`.
+## 1. Task (Nhiệm Vụ)
+Phân loại cảm xúc nhị phân của các văn bản đánh giá phim (Movie Reviews) bằng tiếng Anh thành 2 lớp:
+- `Positive` (Tích cực, điểm số >= 7/10)
+- `Negative` (Tiêu cực, điểm số <= 4/10)
 
-## 2. Mục Đích Sử Dụng (Intended Use)
-### Phù hợp:
-- Minh họa chuẩn mực quy trình NLP end-to-end: anti-leakage, calibration, locked test, serving.
-- Phân tích xu hướng cảm xúc tổng quan của các văn bản đánh giá phim tiếng Anh.
-- Portfolio kỹ thuật chuyên sâu cho vị trí AI / NLP / MLOps Engineer.
+## 2. Dataset (Tập Dữ Liệu)
+- **Bộ dữ liệu:** Large Movie Review Dataset (IMDB v1.0, Maas et al., ACL 2011).
+- **Quy mô:** 50.000 đánh giá phân cực cân bằng (25.000 Train, 25.000 Test).
+- **Phân chia phát triển:** Tập Train được chia stratified thành Train 80% (20.000), Validation 10% (2.500) và Calibration 10% (2.500). Tập Test hoàn toàn độc lập.
+- **Từ điển:** Được xây dựng duy nhất từ tập Train để ngăn ngừa rò rỉ dữ liệu (Train-only vocabulary).
 
-### Không phù hợp:
-- Tự động ra quyết định ảnh hưởng trực tiếp đến người dùng mà không có con người giám sát (Human-in-the-loop).
-- Xử lý ngôn ngữ ngoài tiếng Anh hoặc các văn bản ngoài miền đánh giá điện ảnh.
-- Sử dụng trực tiếp điểm sigmoid thô mà không thông qua Temperature Scaling hiệu chuẩn.
+## 3. Models (Kiến Trúc Mô Hình)
+Dự án đối chiếu hai mô hình tiêu biểu:
+1. **Baseline (Sparse-Text):** TF-IDF (unigram + bigram, min_df=2, sublinear TF, 50.000 features) kết hợp hồi quy Logistic Regression. Cho phép trích xuất các n-gram có trọng số đóng góp mạnh nhất.
+2. **Deep Learning:** Bidirectional LSTM (BiLSTM) với Embedding Layer (128d), 2 lớp LSTM 2 chiều (hidden 128d), áp dụng `pack_padded_sequence` để tối ưu tính toán chuỗi độ dài biến thiên, kết hợp Dropout (0.4) và Linear Layer.
 
-## 3. Dữ Liệu Huấn Luyện & Giao Thức Chống Rò Rỉ (Data & Anti-Leakage)
-- **Nguồn dữ liệu:** Large Movie Review Dataset (IMDB v1.0, 50.000 mẫu).
-- **Kiểm soát rò rỉ:**
-  - Băm SHA256 văn bản gốc (Raw Hash).
-  - Băm SHA256 văn bản chuẩn hóa canonical tokenization (`normalized_exact_hash`); đây không phải semantic near-duplicate.
-  - Official Test chỉ được audit overlap với Train; overlap làm pipeline fail, không sửa benchmark.
-  - Train/Validation/Calibration là 20.000/2.500/2.500; từ điển development fit **CHỈ** trên Train.
+## 4. Calibration (Hiệu Chuẩn Xác Suất)
+Mô hình BiLSTM được hiệu chuẩn bằng **Temperature Scaling** ($T > 0$) trên Calibration logits thông qua tối ưu hóa NLL (Negative Log-Likelihood) bằng thuật toán L-BFGS:
+$$\hat{p} = \sigma\left(\frac{z}{T}\right)$$
+Giúp đưa xác suất dự đoán về gần với độ chính xác thực tế, giảm thiểu hiện tượng overconfidence của mạng nơ-ron.
 
-## 4. Hiệu Chuẩn Xác Suất & Chính Sách Quyết Định (Probability Calibration & Decision Policy)
-- **Temperature Scaling:** Mạng nơ-ron được tối ưu hóa hệ số $T > 0$ trên Calibration Logits để tránh overconfidence:
-  $$\hat{p} = \sigma\left(\frac{z}{T}\right)$$
-- **Đo lường hiệu chuẩn:** Brier Score và Expected Calibration Error (ECE qua 10 bins).
-- **Chính sách selective classification:** nhãn dùng threshold 0.5; `confidence = max(p, 1-p)`. Calibration chọn `confidence_threshold = τ`; nếu confidence < τ thì `review_required`.
+## 5. Metrics (Chỉ Số Đánh Giá)
+- **Phân loại:** Accuracy, Macro-F1, ROC-AUC, PR-AUC.
+- **Độ tin cậy xác suất:** Brier Score, Expected Calibration Error (ECE qua 10 bins), và biểu đồ Reliability Diagram.
+- **Hiệu năng hệ thống:** Thời gian suy luận trung bình trên CPU (ms/sample) và số lượng tham số.
 
-## 5. Giao Thức Đánh Giá Độc Lập (Evaluation Protocol)
-- **Loại bỏ Test Peeking:** Quá trình ứng viên chỉ lưu `validation_metrics.json`. `compare_models.py` tổng hợp Development Leaderboard từ Validation để chọn Champion.
-  - **Locked Final Test:** Chỉ có mô hình Champion được mở tập Test chính thức đúng **1 LẦN DUY NHẤT** thông qua `python -m scripts.evaluate_release`.
+## 6. Intended Use (Mục Đích Sử Dụng)
+- Phân tích cảm xúc tổng quan của bài đánh giá phim tiếng Anh.
+- Tham khảo kiến trúc chuẩn mực: Baseline so sánh, kiểm soát rò rỉ từ vựng, hiệu chuẩn xác suất và phân tích lỗi.
 
-## 6. Hạn Chế & Giảm Thiểu Rủi Ro (Limitations & Mitigations)
-- **Cấu trúc ngôn ngữ phức tạp:** Có thể hiểu nhầm câu mỉa mai (sarcasm) hoặc câu có cảm xúc hỗn hợp/đảo chiều ở đoạn kết.
-- **Ranh giới miền:** Gắn cờ `OUT_OF_DOMAIN_LANGUAGE_HEURISTIC`; đây chỉ là heuristic, không phải language detector.
-- **Cắt ngắn chuỗi:** Tự động phát hiện và đính kèm cờ `TRUNCATED_INPUT` nếu câu vượt quá `max_length`.
-- **Độ tin cậy từ vựng:** Cung cấp cảnh báo `HIGH_OOV_WARNING` khi tỷ lệ từ ngoài từ điển vượt quá 20%.
-
-## 7. Khả Năng Tái Lập (Reproducibility)
-- Release checkpoint/model bundle tuân thủ **Artifact Schema Version 3**, tích hợp metadata policy, source/split hashes, version và final-fit metadata; RNN lưu `model_state`/`vocabulary`, còn baseline lưu pipeline `model.joblib` và validation/explainability facts.
-- Cố định seed ngẫu nhiên cho Python, NumPy và PyTorch cuDNN deterministic.
+## 7. Limitations (Hạn Chế)
+- **Ngôn ngữ:** Chỉ hỗ trợ tiếng Anh; không phù hợp với các ngôn ngữ khác hoặc văn bản ngoài miền đánh giá điện ảnh.
+- **Hiện tượng ngôn ngữ phức tạp:** Có thể hiểu sai các câu mỉa mai (sarcasm), phủ định kép hoặc cảm xúc hỗn hợp/đảo chiều ở đoạn kết.
+- **Độ dài và từ ngoài từ điển (OOV):** Các bài đánh giá dài (>256 tokens) phải cắt ngắn (head-tail truncation); từ vựng mới không có trong tập Train sẽ chuyển thành `<UNK>`.

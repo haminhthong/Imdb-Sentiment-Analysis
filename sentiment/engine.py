@@ -1,11 +1,4 @@
-"""Vòng lặp huấn luyện (Training Loop), đánh giá (Evaluation) và Dừng sớm (Early Stopping).
-
-Module này chứa các hàm thực thi cốt lõi cho quá trình học của mô hình:
-1. `run_epoch`: Chạy một epoch ở chế độ huấn luyện hoặc đánh giá.
-2. `train_model`: Huấn luyện theo dõi Validation Loss, áp dụng Early Stopping.
-3. `evaluate_model`: Đo lường toàn diện các chỉ số: Loss, Accuracy, Macro-F1,
-   ROC-AUC, PR-AUC, Brier Score, ECE.
-"""
+"""Vòng lặp huấn luyện (Training Loop) và đánh giá (Evaluation) cho mô hình PyTorch."""
 
 from collections.abc import Callable
 from copy import deepcopy
@@ -43,7 +36,7 @@ def run_epoch(
     device: torch.device,
     optimizer: torch.optim.Optimizer | None = None,
 ) -> EpochMetrics:
-    """Chạy một epoch; nếu truyền `optimizer` sẽ huấn luyện, ngược lại sẽ đánh giá."""
+    """Chạy một epoch huấn luyện hoặc đánh giá."""
     is_training = optimizer is not None
     model.train(is_training)
 
@@ -90,12 +83,8 @@ def train_model(
     epochs: int,
     patience: int,
     on_epoch_end: Callable[[int, EpochMetrics, EpochMetrics], None] | None = None,
-) -> dict[str, Any]:
-    """Huấn luyện và early-stop chỉ dựa trên Validation Loss.
-
-    ``best_epoch`` được trả ra để final-fit có thể train cố định trên Train + Val
-    sau khi kiến trúc và số epoch đã được đóng băng.
-    """
+) -> tuple[dict[str, Any], int]:
+    """Huấn luyện mô hình và Early Stopping dựa trên Validation Loss."""
     history: dict[str, Any] = {
         "train_loss": [],
         "train_accuracy": [],
@@ -125,7 +114,6 @@ def train_model(
         if on_epoch_end is not None:
             on_epoch_end(epoch, train_metrics, validation_metrics)
 
-        # Kiểm tra điều kiện lưu mô hình tốt nhất
         if validation_metrics.loss < best_loss:
             best_loss = validation_metrics.loss
             best_state = deepcopy(model.state_dict())
@@ -141,32 +129,7 @@ def train_model(
                 break
 
     model.load_state_dict(best_state)
-    history["best_epoch"] = best_epoch
-    history["best_validation_loss"] = best_loss
-    return history
-
-
-def train_fixed_epochs(
-    model: nn.Module,
-    train_loader: DataLoader,
-    optimizer: torch.optim.Optimizer,
-    loss_function: nn.Module,
-    device: torch.device,
-    epochs: int,
-) -> dict[str, list[float]]:
-    """Final fit không early stopping, dùng epoch đã chọn từ development."""
-    if epochs <= 0:
-        raise ValueError("epochs phải lớn hơn 0.")
-    history: dict[str, list[float]] = {"train_loss": [], "train_accuracy": []}
-    for epoch in range(1, epochs + 1):
-        metrics = run_epoch(model, train_loader, loss_function, device, optimizer)
-        history["train_loss"].append(metrics.loss)
-        history["train_accuracy"].append(metrics.accuracy)
-        print(
-            f"Final fit epoch {epoch:02d}/{epochs:02d} | "
-            f"Loss={metrics.loss:.4f}, Acc={metrics.accuracy:.2%}"
-        )
-    return history
+    return history, best_epoch
 
 
 def evaluate_model(
@@ -178,82 +141,69 @@ def evaluate_model(
     decision_threshold: float = 0.5,
     return_raw: bool = False,
 ) -> dict[str, Any]:
-    """Đánh giá toàn diện các chỉ số phân loại và chỉ số hiệu chuẩn (Calibration).
-
-    Chỉ số tính toán bao gồm:
-    - Loss & Log-Loss
-    - Accuracy & Macro-F1
-    - Precision, Recall
-    - ROC-AUC & PR-AUC
-    - Brier Score & Expected Calibration Error (ECE)
-    - Confusion Matrix
-    """
+    """Đánh giá toàn diện mô hình: Loss, Accuracy, Macro-F1, ROC-AUC, PR-AUC, Brier, ECE."""
     model.eval()
-    labels_all: list[int] = []
-    logits_all: list[float] = []
-    losses: list[float] = []
+    total_loss = 0.0
+    total_samples = 0
+    all_logits: list[float] = []
+    all_labels: list[int] = []
 
     with torch.inference_mode():
-        for tokens, lengths, labels in tqdm(loader, leave=False):
+        for tokens, lengths, labels in loader:
             tokens = tokens.to(device)
             lengths = lengths.to(device)
             labels = labels.to(device)
 
             logits = model(tokens, lengths)
-            loss_val = loss_function(logits, labels)
+            loss = loss_function(logits, labels)
 
-            losses.append(loss_val.item() * labels.size(0))
-            labels_all.extend(labels.int().cpu().tolist())
-            logits_all.extend(logits.cpu().tolist())
+            batch_size = labels.size(0)
+            total_loss += loss.item() * batch_size
+            total_samples += batch_size
 
-    total_samples = len(labels_all)
-    if total_samples == 0:
-        return {}
+            all_logits.extend(logits.cpu().tolist())
+            all_labels.extend(labels.cpu().int().tolist())
 
-    logits_arr = np.array(logits_all, dtype=np.float32)
-    labels_arr = np.array(labels_all, dtype=np.int32)
+    y_true = np.array(all_labels, dtype=int)
+    logits_arr = np.array(all_logits, dtype=np.float32)
 
-    # Tính toán xác suất (có áp dụng Temperature Scaling nếu T != 1.0)
     scaled_logits = logits_arr / max(1e-4, temperature)
-    # Tránh overflow khi report trên checkpoint có logit cực lớn.
-    scaled_logits = np.clip(scaled_logits, -60.0, 60.0)
     probabilities = 1.0 / (1.0 + np.exp(-scaled_logits))
     predictions = (probabilities >= decision_threshold).astype(int)
 
-    # ROC-AUC và PR-AUC (bảo vệ trường hợp chỉ có 1 class trong mẫu nhỏ)
-    unique_labels = set(labels_arr)
+    unique_labels = set(y_true)
     if len(unique_labels) > 1:
-        roc_auc = float(roc_auc_score(labels_arr, probabilities))
-        pr_auc = float(average_precision_score(labels_arr, probabilities))
+        roc_auc = float(roc_auc_score(y_true, probabilities))
+        pr_auc = float(average_precision_score(y_true, probabilities))
     else:
         roc_auc = 0.5
         pr_auc = 0.5
 
     report = classification_report(
-        labels_arr,
+        y_true,
         predictions,
+        labels=[0, 1],
         target_names=["Negative", "Positive"],
         output_dict=True,
         zero_division=0,
     )
 
-    metrics: dict[str, Any] = {
-        "loss": float(np.sum(losses) / total_samples),
-        "accuracy": float(accuracy_score(labels_arr, predictions)),
+    metrics = {
+        "loss": total_loss / total_samples if total_samples > 0 else 0.0,
+        "accuracy": float(accuracy_score(y_true, predictions)),
         "macro_f1": float(report["macro avg"]["f1-score"]),
         "roc_auc": roc_auc,
         "pr_auc": pr_auc,
-        "brier_score": compute_brier_score(labels_arr, probabilities),
-        "ece": compute_ece(labels_arr, probabilities, n_bins=10),
-        "log_loss": compute_log_loss_score(labels_arr, probabilities),
-        "temperature": float(temperature),
-        "decision_threshold": float(decision_threshold),
+        "brier_score": compute_brier_score(y_true, probabilities),
+        "ece": compute_ece(y_true, probabilities, n_bins=10),
+        "log_loss": compute_log_loss_score(y_true, probabilities),
         "classification_report": report,
-        "confusion_matrix": confusion_matrix(labels_arr, predictions).tolist(),
+        "confusion_matrix": confusion_matrix(y_true, predictions, labels=[0, 1]).tolist(),
     }
 
     if return_raw:
         metrics["raw_logits"] = logits_arr
-        metrics["raw_labels"] = labels_arr
+        metrics["raw_labels"] = y_true
+        metrics["probabilities"] = probabilities
 
     return metrics

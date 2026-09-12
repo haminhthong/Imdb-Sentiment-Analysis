@@ -1,9 +1,10 @@
-"""Gói phân loại cảm xúc đánh giá phim IMDB.
-
-Các thành phần không được import sẵn để những tiện ích nhẹ như tokenizer vẫn dùng
-được trong môi trường chưa cài PyTorch.
-"""
+"""Gói phân loại cảm xúc đánh giá phim IMDB (CineSentiment)."""
 
 from .config import ExperimentConfig
+from .model import BiLSTMSentimentClassifier, SentimentRNN
 
-__all__ = ["ExperimentConfig"]
+__all__ = [
+    "BiLSTMSentimentClassifier",
+    "ExperimentConfig",
+    "SentimentRNN",
+]

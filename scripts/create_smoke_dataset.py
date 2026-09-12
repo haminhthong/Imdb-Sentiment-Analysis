@@ -23,7 +23,7 @@ def main() -> None:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(SMOKE_ROWS).to_csv(output, index=False, encoding="utf-8")
-    print(f"Đã tạo smoke dataset tại {output.resolve()}")
+    print(f"Created smoke dataset at: {output.resolve()}")
 
 
 if __name__ == "__main__":

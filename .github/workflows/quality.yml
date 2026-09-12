@@ -21,8 +21,5 @@ jobs:
         run: python -m ruff check .
       - name: Ruff format check
         run: python -m ruff format --check .
-      - name: Unit and invariant tests
+      - name: Unit tests
         run: python -m pytest -q
-      - name: Compile Python sources
-        run: >-
-          python -c "from pathlib import Path; roots=[Path('sentiment'),Path('scripts'),Path('tests')]; files=list(Path('.').glob('*.py'))+[p for root in roots for p in root.rglob('*.py')]; [compile(p.read_text(encoding='utf-8'),str(p),'exec') for p in files]"

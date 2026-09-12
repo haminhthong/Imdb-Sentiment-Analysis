@@ -1,11 +1,13 @@
-"""Text contract dùng chung cho training, calibration và serving.
+"""Xử lý văn bản và quản lý từ điển cho bài toán phân loại cảm xúc IMDB.
 
-Contract v2: HTML entity được giải mã, thẻ HTML được loại bỏ, chữ được đưa về
-chữ thường và token được lấy bằng word-regex. Không dùng stopword removal hay
-stemming để giữ lại tín hiệu phủ định của bài toán sentiment.
+Các tính năng chính:
+1. Chuẩn hóa văn bản: giải mã thực thể HTML, loại bỏ thẻ HTML, chuyển chữ thường.
+2. Tokenizer: Sử dụng biểu thức chính quy bảo tồn các từ phủ định quan trọng
+   như "don't", "isn't", "can't", "won't".
+3. Từ điển (Vocabulary): Quản lý ánh xạ token sang index, hỗ trợ <PAD> và <UNK>.
+4. Mã hóa & Đệm (Padding/Truncation): Hỗ trợ cắt chuỗi theo 'first' hoặc 'head_tail'.
 """
 
-import hashlib
 import html
 import re
 from collections import Counter
@@ -13,18 +15,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-TOKENIZER_VERSION = "word-regex-v2"
-
-# Token đặc biệt cho Padding và Out-Of-Vocabulary
 PAD_TOKEN = "<PAD>"
 UNK_TOKEN = "<UNK>"
 
 # Regex giữ lại chữ cái, chữ số và dấu nháy trong các từ phủ định (ví dụ: "don't", "isn't")
 TOKEN_PATTERN = re.compile(r"[a-z0-9]+(?:'[a-z0-9]+)?")
-# Regex loại bỏ tất cả các thẻ HTML (ví dụ: <br>, <p>, ...)
 HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
-# Một heuristic nhỏ để gắn cờ input có thể ngoài miền; đây không phải language detector.
 COMMON_ENGLISH_WORDS = {
     "the",
     "a",
@@ -66,18 +63,14 @@ COMMON_ENGLISH_WORDS = {
     "not",
 }
 
+TruncationStrategy = Literal["first", "head_tail"]
+
 
 def tokenize(text: str) -> list[str]:
     """Chuẩn hóa văn bản, xóa thẻ HTML, chuyển chữ thường và tách token.
 
-    Hàm giải mã các ký tự HTML entity (ví dụ: &amp; -> &), loại bỏ các thẻ HTML,
-    chuyển thành chữ thường và trích xuất danh sách token theo biểu thức chính quy.
-
-    Args:
-        text (str): Văn bản đánh giá cần tách token.
-
-    Returns:
-        list[str]: Danh sách các token từ văn bản đầu vào.
+    Giữ nguyên các dạng viết tắt phủ định như "don't", "isn't" để phục vụ
+    phân tích cảm xúc.
     """
     if not isinstance(text, str):
         return []
@@ -85,28 +78,17 @@ def tokenize(text: str) -> list[str]:
     return TOKEN_PATTERN.findall(normalized)
 
 
-def compute_raw_hash(text: str) -> str:
-    """Tính mã băm SHA256 của chuỗi văn bản gốc (Raw Text Hash)."""
-    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+def normalize_text(text: str) -> str:
+    """Chuẩn hóa văn bản thành chuỗi các token cách nhau bởi khoảng trắng.
 
-
-def compute_normalized_text_hash(text: str) -> str:
-    """Tính ``normalized_exact_hash`` sau canonical tokenization.
-
-    Hai văn bản chỉ khác nhau về chữ hoa/thường, thẻ HTML (như <br />),
-    khoảng trắng thừa hoặc dấu câu ngoại lai sẽ có cùng normalized hash.
+    Dùng để phát hiện các câu trùng lặp nội dung dù khác nhau về thẻ HTML,
+    khoảng trắng thừa hoặc chữ hoa/thường.
     """
-    tokens = tokenize(text)
-    canonical_representation = " ".join(tokens)
-    return hashlib.sha256(canonical_representation.encode("utf-8", errors="replace")).hexdigest()
+    return " ".join(tokenize(text))
 
 
 def detect_language_warning(text: str) -> list[str]:
-    """Gắn cờ heuristic input có thể ngoài miền ngôn ngữ tiếng Anh.
-
-    Returns:
-        list[str]: Cảnh báo ``OUT_OF_DOMAIN_LANGUAGE_HEURISTIC`` nếu phát hiện.
-    """
+    """Gắn cờ cảnh báo nếu văn bản đầu vào có dấu hiệu ngoài miền tiếng Anh."""
     if not isinstance(text, str) or not text.strip():
         return []
 
@@ -114,13 +96,10 @@ def detect_language_warning(text: str) -> list[str]:
     if not tokens:
         return []
 
-    # Kiểm tra tỷ lệ ký tự non-ASCII
     total_chars = len(text)
     non_ascii_chars = sum(1 for c in text if ord(c) > 127)
     non_ascii_ratio = non_ascii_chars / total_chars if total_chars > 0 else 0.0
 
-    # Nếu câu có độ dài tương đối (>= 5 tokens) nhưng không chứa từ tiếng Anh quen thuộc nào
-    # hoặc tỷ lệ ký tự lạ vượt 25%
     has_english_token = any(token in COMMON_ENGLISH_WORDS for token in tokens)
     if (len(tokens) >= 5 and not has_english_token) or non_ascii_ratio > 0.25:
         return ["OUT_OF_DOMAIN_LANGUAGE_HEURISTIC"]
@@ -130,186 +109,120 @@ def detect_language_warning(text: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Vocabulary:
-    """Quản lý ánh xạ hai chiều giữa từ (token) và chỉ số số nguyên (index).
-
-    Attributes:
-        token_to_index (dict[str, int]): Ánh xạ từ token sang chỉ số số nguyên.
-    """
+    """Quản lý ánh xạ hai chiều giữa từ (token) và chỉ số số nguyên (index)."""
 
     token_to_index: dict[str, int]
 
     @property
     def pad_index(self) -> int:
-        """Chỉ số của token padding `<PAD>`."""
         return self.token_to_index[PAD_TOKEN]
 
     @property
-    def unknown_index(self) -> int:
-        """Chỉ số của token chưa biết `<UNK>`."""
+    def unk_index(self) -> int:
         return self.token_to_index[UNK_TOKEN]
 
     def __len__(self) -> int:
-        """Kích thước tổng cộng của bộ từ vựng."""
         return len(self.token_to_index)
 
-    def encode(self, tokens: Iterable[str]) -> list[int]:
-        """Mã hóa danh sách các token thành chuỗi các chỉ số số nguyên.
-
-        Args:
-            tokens (Iterable[str]): Danh sách các từ cần mã hóa.
-
-        Returns:
-            list[int]: Danh sách chỉ số tương ứng. Nếu từ không có trong từ điển,
-                sẽ dùng chỉ số của `<UNK>`.
-        """
-        return [self.token_to_index.get(token, self.unknown_index) for token in tokens]
-
-    def compute_oov_stats(self, tokens: Iterable[str]) -> tuple[int, float]:
-        """Tính số lượng từ OOV và tỷ lệ OOV trên danh sách token.
-
-        Returns:
-            tuple[int, float]: (oov_count, oov_rate).
-        """
-        token_list = list(tokens)
-        if not token_list:
-            return 0, 0.0
-        oov_count = sum(1 for t in token_list if t not in self.token_to_index)
-        return oov_count, oov_count / len(token_list)
-
-    def compute_hash(self) -> str:
-        """Tạo mã băm SHA256 cho toàn bộ bộ từ điển để đảm bảo version contract."""
-        sorted_pairs = sorted(self.token_to_index.items())
-        serialized = ";".join(f"{token}:{idx}" for token, idx in sorted_pairs)
-        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
-    def to_dict(self) -> dict[str, int]:
-        """Xuất từ điển thành dictionary chuẩn."""
-        return dict(self.token_to_index)
+    def to_dict(self) -> dict[str, Any]:
+        return {"token_to_index": self.token_to_index}
 
     @classmethod
-    def from_dict(cls, data: dict[str, int]) -> "Vocabulary":
-        """Khởi tạo Vocabulary từ dictionary lưu trong checkpoint.
-
-        Args:
-            data (dict[str, int]): Dictionary chứa ánh xạ token -> index.
-
-        Returns:
-            Vocabulary: Đối tượng Vocabulary đã phục hồi.
-        """
-        return cls({str(token): int(index) for token, index in data.items()})
+    def from_dict(cls, data: dict[str, Any]) -> "Vocabulary":
+        return cls(token_to_index=data["token_to_index"])
 
 
 def build_vocabulary(
-    texts: Iterable[str], min_frequency: int = 5, max_size: int = 50_000
+    texts: Iterable[str],
+    min_frequency: int = 5,
+    max_vocabulary_size: int = 50_000,
 ) -> Vocabulary:
-    """Tạo bộ từ vựng từ tập dữ liệu huấn luyện (Train Split).
-
-    Để tránh rò rỉ dữ liệu (Data Leakage), bộ từ vựng CHỈ được xây dựng từ tập
-    train. Các từ có tần suất xuất hiện nhỏ hơn `min_frequency` hoặc vượt quá
-    `max_size` sẽ bị loại bỏ.
-
-    Args:
-        texts (Iterable[str]): Danh sách các câu đánh giá thuộc tập train.
-        min_frequency (int): Tần suất xuất hiện tối thiểu để giữ lại từ. Mặc định là 5.
-        max_size (int): Kích thước tối đa của bộ từ vựng. Mặc định là 50,000.
-
-    Returns:
-        Vocabulary: Bộ từ vựng đã được khởi tạo kèm các token đặc biệt `<PAD>` và `<UNK>`.
-    """
+    """Xây dựng bộ từ vựng từ tập văn bản (chỉ nên gọi trên tập Train)."""
     counter: Counter[str] = Counter()
     for text in texts:
         counter.update(tokenize(text))
 
-    # Dành 2 vị trí cho token đặc biệt <PAD> (index 0) và <UNK> (index 1)
-    capacity = max(0, max_size - 2)
-    tokens = [token for token, count in counter.most_common() if count >= min_frequency][:capacity]
+    token_to_index: dict[str, int] = {
+        PAD_TOKEN: 0,
+        UNK_TOKEN: 1,
+    }
 
-    mapping = {PAD_TOKEN: 0, UNK_TOKEN: 1}
-    mapping.update({token: index for index, token in enumerate(tokens, start=2)})
-    return Vocabulary(mapping)
+    sorted_tokens = [
+        token
+        for token, count in counter.most_common()
+        if count >= min_frequency and token not in token_to_index
+    ]
+
+    available_slots = max_vocabulary_size - len(token_to_index)
+    for token in sorted_tokens[:available_slots]:
+        token_to_index[token] = len(token_to_index)
+
+    return Vocabulary(token_to_index=token_to_index)
 
 
-TruncationStrategy = Literal["first", "head_tail"]
+def truncate_tokens(
+    tokens: list[str], max_length: int, strategy: TruncationStrategy = "head_tail"
+) -> list[str]:
+    """Cắt ngắn danh sách token nếu vượt quá max_length."""
+    if len(tokens) <= max_length:
+        return tokens
+
+    if strategy == "head_tail":
+        head_length = max_length // 2
+        tail_length = max_length - head_length
+        return tokens[:head_length] + tokens[-tail_length:]
+
+    return tokens[:max_length]
 
 
 def encode_and_pad(
     text: str,
     vocabulary: Vocabulary,
     max_length: int,
-    strategy: TruncationStrategy = "first",
+    strategy: TruncationStrategy = "head_tail",
 ) -> tuple[list[int], int]:
-    """Mã hóa văn bản thành chuỗi chỉ số có độ dài cố định và trả về độ dài thực.
+    """Mã hóa văn bản thành danh sách chỉ số và đệm cố định đúng max_length."""
+    raw_tokens = tokenize(text)
+    used_tokens = truncate_tokens(raw_tokens, max_length, strategy=strategy)
+    actual_length = len(used_tokens)
 
-    Args:
-        text (str): Văn bản đánh giá đầu vào.
-        vocabulary (Vocabulary): Bộ từ vựng để mã hóa.
-        max_length (int): Độ dài tối đa sau khi pad/truncate.
-        strategy (TruncationStrategy): 'first' (lấy các từ đầu) hoặc 'head_tail'
-            (ghép nửa đầu và nửa cuối văn bản). Mặc định là 'first'.
+    encoded = [vocabulary.token_to_index.get(token, vocabulary.unk_index) for token in used_tokens]
 
-    Returns:
-        tuple[list[int], int]:
-            - list[int]: Danh sách chỉ số có độ dài chính xác bằng `max_length`.
-            - int: Độ dài thực tế (đã bị giới hạn bởi `max_length`) trước khi pad.
-    """
-    encoded, length, _ = encode_with_audit(text, vocabulary, max_length, strategy)
-    return encoded, length
+    if len(encoded) < max_length:
+        encoded.extend([vocabulary.pad_index] * (max_length - len(encoded)))
+
+    return encoded, actual_length
 
 
 def encode_with_audit(
     text: str,
     vocabulary: Vocabulary,
     max_length: int,
-    strategy: TruncationStrategy = "first",
+    strategy: TruncationStrategy = "head_tail",
 ) -> tuple[list[int], int, dict[str, Any]]:
-    """Mã hóa văn bản kèm audit trước và sau khi cắt chuỗi.
+    """Mã hóa văn bản và trả về báo cáo kiểm toán thông tin token."""
+    raw_tokens = tokenize(text)
+    total_tokens = len(raw_tokens)
+    used_tokens = truncate_tokens(raw_tokens, max_length, strategy=strategy)
+    actual_length = len(used_tokens)
 
-    Returns:
-        tuple[list[int], int, dict[str, Any]]:
-            - encoded: Chuỗi chỉ số tokens [max_length].
-            - length: Độ dài thực tế chuỗi dùng trong pack_padded_sequence.
-            - audit: Có ``input_oov_rate`` cho toàn bộ input và ``used_oov_rate``
-              cho đúng các token mô hình thực sự nhìn thấy.
-    """
-    tokens = tokenize(text)
-    total_tokens = len(tokens)
-    input_oov_count, input_oov_rate = vocabulary.compute_oov_stats(tokens)
+    encoded = [vocabulary.token_to_index.get(token, vocabulary.unk_index) for token in used_tokens]
 
-    if not tokens:
-        selected_tokens: list[str] = []
-    elif len(tokens) <= max_length:
-        selected_tokens = tokens
-    elif strategy == "head_tail":
-        head_len = max_length // 2
-        tail_len = max_length - head_len
-        selected_tokens = tokens[:head_len] + tokens[-tail_len:]
-    else:  # strategy == "first"
-        selected_tokens = tokens[:max_length]
+    input_oov_count = sum(1 for t in raw_tokens if t not in vocabulary.token_to_index)
+    used_oov_count = sum(1 for t in used_tokens if t not in vocabulary.token_to_index)
 
-    used_oov_count, used_oov_rate = vocabulary.compute_oov_stats(selected_tokens)
-    encoded = vocabulary.encode(selected_tokens)
-    length = max(1, len(encoded))
-    if not encoded:
-        encoded = [vocabulary.unknown_index]
+    input_oov_rate = input_oov_count / total_tokens if total_tokens > 0 else 0.0
+    used_oov_rate = used_oov_count / actual_length if actual_length > 0 else 0.0
 
-    is_truncated = total_tokens > max_length
-    used_tokens = len(selected_tokens)
-
-    # Thêm padding về độ dài chuẩn max_length
     if len(encoded) < max_length:
         encoded.extend([vocabulary.pad_index] * (max_length - len(encoded)))
 
     audit = {
         "input_tokens": total_tokens,
-        "used_tokens": used_tokens,
-        "is_truncated": is_truncated,
-        "input_oov_count": input_oov_count,
+        "used_tokens": actual_length,
+        "is_truncated": total_tokens > max_length,
         "input_oov_rate": round(input_oov_rate, 4),
-        "used_oov_count": used_oov_count,
         "used_oov_rate": round(used_oov_rate, 4),
-        # Alias v1/v2 để client cũ không bị vỡ trong lúc migrate.
-        "oov_count": used_oov_count,
-        "oov_rate": round(used_oov_rate, 4),
     }
 
-    return encoded, length, audit
+    return encoded, actual_length, audit

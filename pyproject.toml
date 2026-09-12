@@ -1,7 +1,7 @@
 [project]
 name = "cinesentiment"
 version = "1.0.0"
-description = "Leakage-safe calibrated BiLSTM sentiment service for IMDB reviews"
+description = "IMDB Sentiment Analysis: TF-IDF Baseline, BiLSTM, Temperature Calibration, and Serving"
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24,<3",
@@ -13,7 +13,7 @@ dependencies = [
   "tqdm>=4.66,<5",
   "joblib>=1.3,<2",
   "fastapi>=0.115,<1",
-  "httpx2>=2,<3",
+  "httpx>=0.27,<1",
   "uvicorn[standard]>=0.30,<1",
   "streamlit>=1.38,<2",
 ]
@@ -24,9 +24,8 @@ dev = ["pytest>=7.4,<9", "ruff>=0.6,<1"]
 [project.scripts]
 cinesentiment-train = "train:main"
 cinesentiment-baseline = "baseline:main"
-cinesentiment-final-fit = "scripts.final_fit:main"
-cinesentiment-calibrate = "scripts.calibrate:main"
-cinesentiment-evaluate = "scripts.evaluate_release:main"
+cinesentiment-evaluate = "evaluate:main"
+cinesentiment-compare = "compare_models:main"
 cinesentiment-predict = "predict:main"
 cinesentiment-api = "api:run"
 
@@ -39,13 +38,11 @@ include = ["sentiment*", "scripts*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -p no:cacheprovider"
-
+addopts = "-ra -p no:cacheprovider --basetemp=.pytest_temp"
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-exclude = ["notebooks/legacy"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

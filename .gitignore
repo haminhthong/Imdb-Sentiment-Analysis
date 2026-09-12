@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .pytest_tmp/
+.pytest_temp/
 .ruff_cache/
 test_tmp/
 scratch/
@@ -9,14 +10,11 @@ scratch/
 venv/
 artifacts/*
 !artifacts/.gitkeep
-!artifacts/releases/
-!artifacts/releases/**
 runs/
 data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
-# Không cho phép dataset đầy đủ quay lại root repository.
 /train.csv
 /test.csv
 .idea/

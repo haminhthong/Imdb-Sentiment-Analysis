@@ -1,14 +1,12 @@
-"""Điểm chạy chính (CLI) để huấn luyện development BiLSTM của CineSentiment.
+"""Huấn luyện mô hình BiLSTM cho phân loại cảm xúc IMDB.
 
-Quy trình chuẩn hóa (Leakage-Safe Validation Protocol):
-1. Đọc dữ liệu, kiểm tra schema, deduplication theo raw & normalized hash.
-2. Huấn luyện mô hình và Early Stopping dựa trên Validation Loss.
-3. Early stopping chỉ nhìn Validation Loss.
-4. Lưu validation metrics và best development checkpoint.
-5. Final fit, calibration và Official Test được tách thành release steps riêng.
-
-Ví dụ sử dụng:
-    python train.py --epochs 15 --batch-size 128
+Quy trình chuẩn mực:
+1. Đọc dữ liệu, kiểm tra schema, deduplicate chuẩn hóa.
+2. Tách Train (80%), Validation (10%), Calibration (10%).
+3. Xây dựng bộ từ điển CHỈ trên tập Train (Train-only vocabulary).
+4. Huấn luyện BiLSTM với pack_padded_sequence và Early Stopping theo Validation Loss.
+5. Học hệ số Temperature Scaling trên Calibration split để hiệu chuẩn xác suất.
+6. Lưu checkpoint tinh gọn (model.pt), metrics và biểu đồ trực quan.
 """
 
 import argparse
@@ -16,76 +14,67 @@ from pathlib import Path
 
 import torch
 
-from sentiment.artifacts import save_checkpoint, save_json, save_plots
+from sentiment.artifacts import save_checkpoint, save_json, save_plots, save_reliability_diagram
+from sentiment.calibration import TemperatureScaler
 from sentiment.config import ExperimentConfig
 from sentiment.data import create_data_bundle
 from sentiment.engine import evaluate_model, train_model
-from sentiment.model import SentimentRNN
-from sentiment.utils import seed_everything, select_device
+from sentiment.model import BiLSTMSentimentClassifier
+from sentiment.utils import configure_utf8_output, seed_everything, select_device
 
 
 def parse_args() -> argparse.Namespace:
-    """Cấu hình các tham số dòng lệnh CLI."""
     parser = argparse.ArgumentParser(
-        description=(
-            "Huấn luyện mô hình phân loại cảm xúc CineSentiment AI "
-            "dưới giao thức Validation an toàn"
-        )
-    )
-    parser.add_argument(
-        "--model",
-        choices=["bilstm"],
-        default="bilstm",
-        help="Mô hình production duy nhất của lifecycle v3: BiLSTM.",
+        description="Huấn luyện mô hình phân loại cảm xúc BiLSTM cho CineSentiment"
     )
     parser.add_argument(
         "--train-data",
         default="data/raw/train.csv",
-        help="Đường dẫn Official Train. Mặc định là 'data/raw/train.csv'.",
+        help="Đường dẫn tệp dữ liệu Train (mặc định: data/raw/train.csv hoặc train.csv)",
     )
     parser.add_argument(
         "--output-dir",
-        default=None,
-        help="Thư mục xuất checkpoint development. Mặc định là 'runs/dev_<model>'.",
+        default="artifacts",
+        help="Thư mục xuất checkpoint và metrics (mặc định: artifacts)",
     )
     parser.add_argument(
         "--epochs",
         type=int,
         default=15,
-        help="Số lượng epoch huấn luyện tối đa. Mặc định là 15.",
+        help="Số lượng epoch tối đa (mặc định: 15)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
         default=128,
-        help="Kích thước lô (batch size). Mặc định là 128.",
+        help="Kích thước batch (mặc định: 128)",
     )
     parser.add_argument(
         "--truncation-strategy",
         choices=["first", "head_tail"],
         default="head_tail",
-        help="Chiến lược cắt chuỗi ('first' hoặc 'head_tail'). Mặc định là 'head_tail'.",
+        help="Chiến lược cắt ngắn chuỗi ('first' hoặc 'head_tail', mặc định: head_tail)",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=42,
-        help="Hạt giống ngẫu nhiên (Random seed). Mặc định là 42.",
+        help="Random seed (mặc định: 42)",
     )
     parser.add_argument(
         "--device",
         choices=["auto", "cpu", "cuda"],
         default="auto",
-        help="Thiết bị tính toán ('auto', 'cpu', 'cuda'). Mặc định là 'auto'.",
+        help="Thiết bị tính toán (mặc định: auto)",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    """Luồng thực thi huấn luyện mô hình từ dòng lệnh."""
+    configure_utf8_output()
     args = parse_args()
     config = ExperimentConfig(
-        model_type=args.model,
+        model_type="bilstm",
         validation_size=0.1,
         calibration_size=0.1,
         epochs=args.epochs,
@@ -96,39 +85,43 @@ def main() -> None:
 
     seed_everything(config.seed)
     device = select_device(args.device)
-    output_dir = Path(args.output_dir or f"runs/dev_{args.model}")
+
+    train_path = Path(args.train_data)
+    if not train_path.is_file() and Path("train.csv").is_file():
+        train_path = Path("train.csv")
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 65)
-    print(f"*** HUAN LUYEN CINESENTIMENT PLATFORM - [{config.model_type.upper()}] ***")
+    print("*** HUẤN LUYỆN MÔ HÌNH BiLSTM (CINESENTIMENT) ***")
     print("=" * 65)
-    print(f"-> Thiet bi tinh toan   : {device}")
-    print(f"-> Thu muc dau ra       : {output_dir}")
-    print(f"-> Batch size / Epochs  : {config.batch_size} / {config.epochs}")
-    print(f"-> Truncation Strategy  : {config.truncation_strategy}")
-    print(f"-> Seed                 : {config.seed}")
+    print(f"-> Thiết bị tính toán  : {device}")
+    print(f"-> Thư mục đầu ra      : {output_dir.resolve()}")
+    print(f"-> Batch size / Epochs : {config.batch_size} / {config.epochs}")
+    print(f"-> Truncation Strategy : {config.truncation_strategy}")
+    print(f"-> Seed                : {config.seed}")
     print("-" * 65)
 
-    # 1. Nạp và kiểm toán chất lượng dữ liệu
-    print("1/4. Dang nap Official Train va tao ba development split...")
-    data = create_data_bundle(args.train_data, config)
-    print(f"     -> Phan bo mau     : {data.sizes}")
-    print(f"     -> Kich thuoc tu dien: {len(data.vocabulary):,} tokens")
+    # 1. Nạp dữ liệu và xây dựng Vocabulary
+    print("1/4. Đang nạp dữ liệu và phân chia Train/Val/Calibration...")
+    data = create_data_bundle(train_path, config)
+    print(f"     -> Phân bổ mẫu    : {data.sizes}")
+    print(f"     -> Từ điển Train  : {len(data.vocabulary):,} tokens")
     print(
-        f"     -> OOV Rates       : Train={data.audit['oov_rates']['train']:.2%}, "
+        f"     -> Tỷ lệ OOV      : Train={data.audit['oov_rates']['train']:.2%}, "
         f"Val={data.audit['oov_rates']['validation']:.2%}, "
-        f"Calibration={data.audit['oov_rates']['calibration']:.2%}"
+        f"Cal={data.audit['oov_rates']['calibration']:.2%}"
     )
 
     # 2. Khởi tạo mô hình
-    print("2/4. Dang khoi tao mo hinh...")
-    model = SentimentRNN(
+    print("2/4. Đang khởi tạo mô hình BiLSTM...")
+    model = BiLSTMSentimentClassifier(
         vocabulary_size=len(data.vocabulary),
         padding_index=data.vocabulary.pad_index,
         config=config,
     ).to(device)
-
-    total_params = model.count_parameters()
-    print(f"     -> Tong tham so mo hinh (Parameters): {total_params:,}")
+    print(f"     -> Tổng tham số   : {model.count_parameters():,} parameters")
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -137,26 +130,9 @@ def main() -> None:
     )
     loss_function = torch.nn.BCEWithLogitsLoss()
 
-    def save_last_checkpoint(epoch, _train_metrics, _validation_metrics) -> None:
-        """Lưu trạng thái epoch cuối để phục vụ resume/debug, tách khỏi best_dev."""
-        save_checkpoint(
-            output_dir / "last.ckpt",
-            model,
-            data.vocabulary,
-            config,
-            training_data_hash=data.audit.get("train_data_hash"),
-            checkpoint_kind="last",
-            model_version="1.0.0-dev",
-            source_dataset_hash=data.audit.get("source_train_hash"),
-            train_split_hash=data.audit.get("train_data_hash"),
-            validation_split_hash=data.audit.get("validation_data_hash"),
-            calibration_split_hash=data.audit.get("calibration_data_hash"),
-            training_epoch=epoch,
-        )
-
-    # 3. Huấn luyện mô hình
-    print("3/4. Tien hanh huan luyen voi Early Stopping...")
-    history = train_model(
+    # 3. Huấn luyện với Early Stopping
+    print("3/4. Đang huấn luyện mô hình (Early Stopping trên Validation Loss)...")
+    history, best_epoch = train_model(
         model=model,
         train_loader=data.train,
         validation_loader=data.validation,
@@ -165,50 +141,53 @@ def main() -> None:
         device=device,
         epochs=config.epochs,
         patience=config.patience,
-        on_epoch_end=save_last_checkpoint,
     )
+    print(f"     -> Best Epoch đạt được: {best_epoch}")
 
-    # 4. Chỉ đánh giá Validation để chọn model/epoch; calibration để release step.
-    print("4/4. Danh gia Validation va luu development checkpoint...")
+    # 4. Hiệu chuẩn Temperature Scaling trên Calibration Set
+    print("4/4. Đang hiệu chuẩn xác suất (Temperature Scaling trên Calibration Set)...")
+    cal_raw = evaluate_model(model, data.calibration, loss_function, device, return_raw=True)
+    scaler = TemperatureScaler()
+    temperature = scaler.fit(cal_raw["raw_logits"], cal_raw["raw_labels"])
+    config.temperature = temperature
+    print(f"     -> Hệ số Temperature học được: T = {temperature:.4f}")
+
+    # Đánh giá cuối trên Validation với Temperature đã hiệu chuẩn
     val_metrics = evaluate_model(
         model,
         data.validation,
         loss_function,
         device,
-        decision_threshold=config.decision_threshold,
+        temperature=temperature,
     )
+    print(f"     -> Validation Accuracy : {val_metrics['accuracy']:.2%}")
+    print(f"     -> Validation Macro-F1 : {val_metrics['macro_f1']:.2%}")
+    print(f"     -> Validation Brier    : {val_metrics['brier_score']:.4f}")
+    print(f"     -> Validation ECE      : {val_metrics['ece']:.4f}")
 
-    # Đây là checkpoint huấn luyện, không phải artifact deploy.
+    # Lưu artifacts
     save_checkpoint(
-        output_dir / "best_dev.ckpt",
+        output_dir / "model.pt",
         model,
         data.vocabulary,
         config,
-        training_data_hash=data.audit.get("train_data_hash"),
-        checkpoint_kind="best_dev",
-        model_version="1.0.0-dev",
-        source_dataset_hash=data.audit.get("source_train_hash"),
-        train_split_hash=data.audit.get("train_data_hash"),
-        validation_split_hash=data.audit.get("validation_data_hash"),
-        calibration_split_hash=data.audit.get("calibration_data_hash"),
-        best_dev_epoch=history.get("best_epoch"),
+        temperature=temperature,
     )
     save_json(output_dir / "validation_metrics.json", val_metrics)
-    save_json(output_dir / "history.json", history)
-    save_json(output_dir / "data_audit.json", data.audit)
     save_plots(output_dir, history, val_metrics["confusion_matrix"])
 
-    print("=" * 65)
-    print("[SUCCESS] HOAN THANH HUAN LUYEN & VALIDATION!")
-    print(f"-> Val Accuracy      : {val_metrics['accuracy']:.2%}")
-    print(f"-> Val Macro F1      : {val_metrics['macro_f1']:.2%}")
-    print(f"-> Val ROC-AUC       : {val_metrics['roc_auc']:.4f}")
-    print(f"-> Val Brier Score   : {val_metrics['brier_score']:.4f}")
-    print(f"-> Val ECE           : {val_metrics['ece']:.4f}")
-    print(f"-> Best epoch         : {history['best_epoch']}")
-    print(f"-> Checkpoint Schema : v3 development ({output_dir / 'best_dev.ckpt'})")
-    print(f"-> Validation Report : {output_dir / 'validation_metrics.json'}")
+    calibrated_val_eval = evaluate_model(
+        model, data.validation, loss_function, device, temperature=temperature, return_raw=True
+    )
+    save_reliability_diagram(
+        output_dir,
+        calibrated_val_eval["raw_labels"],
+        calibrated_val_eval["probabilities"],
+        filename="reliability_diagram.png",
+    )
 
+    print("-" * 65)
+    print(f"✅ Hoàn tất! Model checkpoint đã lưu tại: {output_dir / 'model.pt'}")
     print("=" * 65)
 
 

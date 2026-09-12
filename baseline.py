@@ -1,8 +1,9 @@
 """Huấn luyện baseline TF-IDF + Logistic Regression đối chiếu mô hình Deep Learning.
 
-TF-IDF + Logistic Regression là một first-class model quan trọng cho bài toán sentiment:
-- Đo lường xem mô hình RNN có thực sự đem lại cải tiến vượt bậc so với sparse-text hay không.
-- Cung cấp tính giải thích (Explainability) thông qua trọng số của các n-gram đặc trưng.
+TF-IDF + Logistic Regression là một baseline sparse-text cực mạnh và cần thiết:
+1. Kiểm tra xem BiLSTM có thực sự cải thiện so với mô hình tuyến tính hay không.
+2. Cung cấp tính giải thích (Explainability) thông qua trọng số các n-gram đặc trưng
+   (Top positive và negative n-grams).
 """
 
 import argparse
@@ -26,8 +27,9 @@ from sklearn.pipeline import Pipeline
 from sentiment.calibration import compute_brier_score, compute_ece
 from sentiment.config import ExperimentConfig
 from sentiment.data import split_development_frame
-from sentiment.data_validation import compute_dataset_hash, load_dataset
+from sentiment.data_validation import load_dataset
 from sentiment.text import tokenize
+from sentiment.utils import configure_utf8_output
 
 
 def create_pipeline(max_features: int = 50_000) -> Pipeline:
@@ -59,7 +61,7 @@ def create_pipeline(max_features: int = 50_000) -> Pipeline:
 
 
 def evaluate_baseline(pipeline: Pipeline, texts, labels) -> dict:
-    """Đánh giá toàn diện mô hình baseline bằng cùng bộ metric chuẩn."""
+    """Đánh giá toàn diện mô hình baseline bằng cùng bộ metrics chuẩn."""
     y_true = np.asarray(labels, dtype=int)
     predictions = pipeline.predict(texts)
     probabilities = pipeline.predict_proba(texts)[:, 1]
@@ -82,8 +84,6 @@ def evaluate_baseline(pipeline: Pipeline, texts, labels) -> dict:
 
     return {
         "log_loss": float(log_loss(y_true, probabilities, labels=[0, 1])),
-        # Alias để bảng/consumer cũ không vỡ; report mới dùng log_loss.
-        "loss": float(log_loss(y_true, probabilities, labels=[0, 1])),
         "accuracy": float(accuracy_score(y_true, predictions)),
         "macro_f1": float(report["macro avg"]["f1-score"]),
         "roc_auc": roc_auc,
@@ -95,18 +95,13 @@ def evaluate_baseline(pipeline: Pipeline, texts, labels) -> dict:
     }
 
 
-# Alias tương thích ngược cho unit test
 evaluate = evaluate_baseline
 
 
 def extract_top_features(
     pipeline: Pipeline, top_k: int = 15
 ) -> dict[str, list[dict[str, float | str]]]:
-    """Trích xuất các n-gram có trọng số dương và âm cao nhất (Feature Importance).
-
-    Lưu ý kỹ thuật: Trọng số hồi quy biểu thị mức độ tương quan đặc trưng trong tập huấn luyện,
-    không đồng nghĩa với mối quan hệ nhân quả (Correlation != Causation).
-    """
+    """Trích xuất các n-gram có trọng số dương và âm cao nhất."""
     tfidf = pipeline.named_steps["tfidf"]
     clf = pipeline.named_steps["classifier"]
     feature_names = tfidf.get_feature_names_out()
@@ -127,7 +122,7 @@ def extract_top_features(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Huấn luyện baseline TF-IDF + Logistic Regression cho CineSentiment Platform"
+        description="Huấn luyện baseline TF-IDF + Logistic Regression cho CineSentiment"
     )
     parser.add_argument("--train-data", default="data/raw/train.csv")
     parser.add_argument("--output-dir", default="artifacts/baseline")
@@ -138,11 +133,16 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    configure_utf8_output()
     args = parse_args()
     if not 0 < args.validation_size < 1:
         raise ValueError("validation-size phải nằm trong khoảng (0, 1).")
     if args.max_features <= 0:
         raise ValueError("max-features phải lớn hơn 0.")
+
+    train_path = Path(args.train_data)
+    if not train_path.is_file() and Path("train.csv").is_file():
+        train_path = Path("train.csv")
 
     config = ExperimentConfig(
         validation_size=args.validation_size,
@@ -150,12 +150,17 @@ def main() -> None:
         min_frequency=2,
         max_vocabulary_size=args.max_features,
     )
-    train_source = load_dataset(args.train_data)
+    train_source = load_dataset(train_path)
     train_frame, validation_frame, calibration_frame = split_development_frame(train_source, config)
 
     print("=" * 60)
-    print("*** HUAN LUYEN BASELINE TF-IDF + LOGISTIC REGRESSION ***")
+    print("*** HUẤN LUYỆN BASELINE: TF-IDF + LOGISTIC REGRESSION ***")
     print("=" * 60)
+    print(f"-> Tập dữ liệu: {train_path} ({len(train_source):,} dòng)")
+    print(f"-> Train: {len(train_frame):,} | Val: {len(validation_frame):,}")
+    print(f"-> Max Features: {args.max_features:,} (unigram + bigram)")
+    print("-" * 60)
+
     pipeline = create_pipeline(args.max_features)
     pipeline.fit(train_frame["text"], train_frame["label"].astype(int))
 
@@ -169,33 +174,18 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(pipeline, output_dir / "model.joblib")
 
-    # Lưu validation metrics và báo cáo giải thích tính năng
     (output_dir / "validation_metrics.json").write_text(
         json.dumps(validation_metrics, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     (output_dir / "explainability.json").write_text(
         json.dumps(explainability, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    (output_dir / "data_audit.json").write_text(
-        json.dumps(
-            {
-                "source_train_hash": compute_dataset_hash(train_source),
-                "train_split_hash": compute_dataset_hash(train_frame),
-                "validation_split_hash": compute_dataset_hash(validation_frame),
-                "calibration_split_hash": compute_dataset_hash(calibration_frame),
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
 
     print(f"-> Validation Accuracy : {validation_metrics['accuracy']:.2%}")
     print(f"-> Validation Macro-F1 : {validation_metrics['macro_f1']:.2%}")
     print(f"-> Validation ROC-AUC  : {validation_metrics['roc_auc']:.4f}")
     print(f"-> Validation ECE      : {validation_metrics['ece']:.4f}")
-    print(f"-> Da luu baseline tai : {output_dir.resolve()}")
-
+    print(f"-> Đã lưu baseline tại : {output_dir.resolve()}")
     print("=" * 60)
 
 

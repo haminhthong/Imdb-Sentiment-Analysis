@@ -1,15 +1,11 @@
-"""Mô hình Recurrent Neural Network (RNN) thống nhất cho phân loại cảm xúc.
-
-Module này định nghĩa lớp SentimentRNN hỗ trợ cả 3 kiến trúc:
-- Single-direction LSTM (Long Short-Term Memory)
-- GRU (Gated Recurrent Unit)
-- BiLSTM (Bidirectional LSTM)
+"""Mô hình Bidirectional LSTM (BiLSTM) cho bài toán phân loại cảm xúc.
 
 Đặc điểm kỹ thuật:
-- Sử dụng Embedding layer có padding_idx để bỏ qua gradient padding.
-- Sử dụng PyTorch `pack_padded_sequence` để tối ưu hóa hiệu năng tính toán.
-- Lấy hidden state ở bước thời gian cuối cùng làm biểu diễn vector cho toàn bộ văn bản.
-- Trả về raw logits (chưa qua Sigmoid) để tương thích với `nn.BCEWithLogitsLoss`.
+- Lớp Embedding có padding_idx để bỏ qua cập nhật gradient cho token <PAD>.
+- Sử dụng PyTorch `pack_padded_sequence` để RNN không lãng phí tính toán trên vùng padding.
+- Ghép hidden state của chiều tiến và chiều lùi ở layer cuối: concat(h_forward, h_backward).
+- Áp dụng Dropout để chống overfitting trước khi qua Linear layer chiếu ra 1 logit duy nhất.
+- Trả về raw logit (chưa qua Sigmoid) để tương thích tối ưu với `nn.BCEWithLogitsLoss`.
 """
 
 import torch
@@ -18,75 +14,61 @@ from torch import nn
 from .config import ExperimentConfig
 
 
-class SentimentRNN(nn.Module):
-    """Mô hình phân loại nhị phân dựa trên RNN với tính năng bỏ qua padding.
-
-    Attributes:
-        embedding (nn.Embedding): Lớp nhúng từ (Vocabulary Size -> Embedding Dim).
-        rnn (nn.LSTM | nn.GRU): Lớp RNN cốt lõi (LSTM hoặc GRU).
-        classifier (nn.Sequential): Lớp Dropout và Linear chiếu ra 1 logit duy nhất.
-        bidirectional (bool): Cờ đánh dấu mô hình có phải hai chiều (BiLSTM) hay không.
-    """
+class BiLSTMSentimentClassifier(nn.Module):
+    """Mô hình phân loại nhị phân dựa trên mạng BiLSTM với pack_padded_sequence."""
 
     def __init__(self, vocabulary_size: int, padding_index: int, config: ExperimentConfig) -> None:
-        """Khởi tạo các lớp mạng neural theo cấu hình ExperimentConfig.
+        """Khởi tạo các lớp mạng neural.
 
         Args:
-            vocabulary_size (int): Kích thước bộ từ vựng.
-            padding_index (int): Chỉ số của token `<PAD>` để không cập nhật gradient.
-            config (ExperimentConfig): Siêu tham số mô hình.
+            vocabulary_size: Kích thước bộ từ vựng.
+            padding_index: Chỉ số của token `<PAD>`.
+            config: Cấu hình siêu tham số của mô hình.
         """
         super().__init__()
-        bidirectional = config.model_type == "bilstm"
-        rnn_class = nn.GRU if config.model_type == "gru" else nn.LSTM
-
         self.embedding = nn.Embedding(
             vocabulary_size, config.embedding_dim, padding_idx=padding_index
         )
-        self.rnn = rnn_class(
+        self.lstm = nn.LSTM(
             config.embedding_dim,
             config.hidden_dim,
             num_layers=config.num_layers,
             dropout=config.dropout if config.num_layers > 1 else 0.0,
-            bidirectional=bidirectional,
+            bidirectional=True,
             batch_first=True,
         )
-        output_features = config.hidden_dim * (2 if bidirectional else 1)
         self.classifier = nn.Sequential(
             nn.Dropout(config.dropout),
-            nn.Linear(output_features, 1),
+            nn.Linear(config.hidden_dim * 2, 1),
         )
-        self.bidirectional = bidirectional
 
     def forward(self, tokens: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         """Thực hiện luồng lan truyền tiến (Forward Pass).
 
         Args:
-            tokens (torch.Tensor): Batch các chuỗi chỉ số từ [batch_size, max_length].
-            lengths (torch.Tensor): Độ dài thực tế của từng chuỗi [batch_size].
+            tokens: Batch các chuỗi chỉ số từ [batch_size, max_length].
+            lengths: Độ dài thực tế của từng chuỗi [batch_size].
 
         Returns:
-            torch.Tensor: Logits dự đoán [batch_size]. Giá trị > 0 tương ứng Positive.
+            torch.Tensor: Logits dự đoán [batch_size].
         """
         embedded = self.embedding(tokens)
-        # Nén chuỗi để RNN bỏ qua các bước thời gian thuộc vùng padding
+
+        # Nén chuỗi để LSTM bỏ qua các bước thời gian thuộc vùng padding
         packed = nn.utils.rnn.pack_padded_sequence(
             embedded, lengths.cpu(), batch_first=True, enforce_sorted=False
         )
-        output = self.rnn(packed)
+        _, (hidden, _) = self.lstm(packed)
 
-        # Lấy hidden state cuối cùng (LSTM trả về tuple (h, c), GRU trả về h)
-        hidden = output[1][0] if isinstance(output[1], tuple) else output[1]
-
-        # Ghép hidden state hai chiều hoặc lấy hidden state của layer cuối.
-        features = torch.cat((hidden[-2], hidden[-1]), dim=1) if self.bidirectional else hidden[-1]
+        # Ghép hidden state của hướng tiến (hidden[-2]) và hướng lùi (hidden[-1]) ở layer cuối
+        features = torch.cat((hidden[-2], hidden[-1]), dim=1)
 
         return self.classifier(features).squeeze(1)
 
     def count_parameters(self) -> int:
-        """Đếm tổng số tham số có thể huấn luyện (Trainable Parameters) của mô hình.
-
-        Returns:
-            int: Số lượng tham số cần tối ưu hóa.
-        """
+        """Đếm tổng số tham số có thể huấn luyện (Trainable Parameters)."""
         return sum(param.numel() for param in self.parameters() if param.requires_grad)
+
+
+# Alias tương thích
+SentimentRNN = BiLSTMSentimentClassifier

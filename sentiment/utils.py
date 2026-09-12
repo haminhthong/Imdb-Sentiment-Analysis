@@ -1,12 +1,8 @@
-"""Các hàm tiện ích hệ thống: Cố định seed tái lập kết quả, chọn device và đo độ trễ.
+"""Các hàm tiện ích hệ thống: Cố định seed tái lập kết quả, chọn device và đo độ trễ."""
 
-Module này cung cấp:
-1. `seed_everything`: Đặt hạt giống ngẫu nhiên cho random, numpy và PyTorch.
-2. `select_device`: Tự động nhận diện CPU hoặc GPU CUDA khả dụng.
-3. `measure_latency`: Đo thời gian thực thi suy luận trung bình của mô hình (Inference Latency).
-"""
-
+import contextlib
 import random
+import sys
 import time
 from typing import Any
 
@@ -14,12 +10,18 @@ import numpy as np
 import torch
 
 
-def seed_everything(seed: int) -> None:
-    """Cố định seed ngẫu nhiên cho toàn bộ thư viện để tái lập kết quả thí nghiệm.
+def configure_utf8_output() -> None:
+    """Đảm bảo sys.stdout và sys.stderr không phát sinh lỗi mã hóa trên Windows console."""
+    if hasattr(sys.stdout, "reconfigure"):
+        with contextlib.suppress(Exception):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        with contextlib.suppress(Exception):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-    Args:
-        seed (int): Giá trị seed số nguyên (ví dụ: 42).
-    """
+
+def seed_everything(seed: int) -> None:
+    """Cố định seed ngẫu nhiên cho toàn bộ thư viện để tái lập kết quả thí nghiệm."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -27,24 +29,13 @@ def seed_everything(seed: int) -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-    # Đảm bảo cuDNN chạy chế độ deterministic (tái lập tối đa)
     if torch.backends.cudnn.is_available():
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
 
 def select_device(requested: str = "auto") -> torch.device:
-    """Tự động lựa chọn hoặc kiểm tra tính hợp lệ của thiết bị tính toán PyTorch.
-
-    Args:
-        requested (str): 'auto', 'cpu', hoặc 'cuda'. Mặc định là 'auto'.
-
-    Returns:
-        torch.device: Thiết bị PyTorch được khởi tạo.
-
-    Raises:
-        RuntimeError: Nếu yêu cầu CUDA nhưng hệ thống không có GPU tương thích.
-    """
+    """Tự động lựa chọn hoặc kiểm tra tính hợp lệ của thiết bị tính toán PyTorch."""
     if requested == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if requested == "cuda" and not torch.cuda.is_available():
@@ -53,17 +44,7 @@ def select_device(requested: str = "auto") -> torch.device:
 
 
 def measure_latency(predictor: Any, sample_text: str, runs: int = 50) -> float:
-    """Đo độ trễ suy luận trung bình (milliseconds) của mô hình trên một câu mẫu.
-
-    Args:
-        predictor (Any): Đối tượng SentimentPredictor.
-        sample_text (str): Câu văn bản mẫu dùng để suy luận thử nghiệm.
-        runs (int): Số lần chạy lặp để lấy trung bình. Mặc định là 50.
-
-    Returns:
-        float: Độ trễ suy luận trung bình tính bằng miligiây (ms).
-    """
-    # Khởi động (Warm-up)
+    """Đo độ trễ suy luận trung bình (milliseconds) của mô hình trên một câu mẫu."""
     for _ in range(5):
         _ = predictor.predict(sample_text)
 
