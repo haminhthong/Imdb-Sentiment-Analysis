@@ -196,7 +196,7 @@ def analyze_errors_on_dataset(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Phân tích lỗi mô hình theo các lát cắt NLP")
     parser.add_argument("--checkpoint", default="artifacts/model.pt")
-    parser.add_argument("--data", default="data/raw/test.csv")
+    parser.add_argument("--data", "--test-data", dest="data", default="data/raw/test.csv")
     parser.add_argument("--max-samples", type=int, default=2500)
     parser.add_argument("--output", default="artifacts/error_analysis.json")
     return parser.parse_args()
