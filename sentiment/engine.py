@@ -18,7 +18,12 @@ from torch import nn
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from .calibration import compute_brier_score, compute_ece, compute_log_loss_score
+from .calibration import (
+    TemperatureScaler,
+    compute_brier_score,
+    compute_ece,
+    compute_log_loss_score,
+)
 
 
 @dataclass
@@ -167,8 +172,8 @@ def evaluate_model(
     y_true = np.array(all_labels, dtype=int)
     logits_arr = np.array(all_logits, dtype=np.float32)
 
-    scaled_logits = logits_arr / max(1e-4, temperature)
-    probabilities = 1.0 / (1.0 + np.exp(-scaled_logits))
+    scaler = TemperatureScaler(temperature)
+    probabilities = scaler.calibrate(logits_arr)
     predictions = (probabilities >= decision_threshold).astype(int)
 
     unique_labels = set(y_true)

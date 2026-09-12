@@ -7,6 +7,7 @@ from typing import Any
 import joblib
 import torch
 
+from .calibration import TemperatureScaler
 from .config import ExperimentConfig
 from .model import BiLSTMSentimentClassifier
 from .text import (
@@ -112,12 +113,13 @@ class SentimentPredictor:
 
         with torch.inference_mode():
             logits = self.model(tokens, lengths)
-            scaled_logits = logits / max(1e-4, self.temperature)
-            calibrated_probs = torch.sigmoid(scaled_logits).cpu().tolist()
-
-        # Đảm bảo calibrated_probs luôn là list float
-        if isinstance(calibrated_probs, float):
-            calibrated_probs = [calibrated_probs]
+            scaler = TemperatureScaler(self.temperature)
+            calibrated_arr = scaler.calibrate(logits)
+            calibrated_probs = (
+                calibrated_arr.tolist()
+                if hasattr(calibrated_arr, "tolist")
+                else [float(calibrated_arr)]
+            )
 
         results: list[PredictionResult] = []
         for i, text in enumerate(texts):
