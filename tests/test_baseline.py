@@ -1,4 +1,4 @@
-from baseline import create_pipeline, evaluate
+from baseline import create_pipeline, evaluate_baseline
 
 
 def test_baseline_huan_luyen_va_du_doan_duoc():
@@ -11,6 +11,6 @@ def test_baseline_huan_luyen_va_du_doan_duoc():
     labels = [1, 1, 0, 0]
     pipeline = create_pipeline(max_features=100)
     pipeline.fit(texts, labels)
-    metrics = evaluate(pipeline, texts, labels)
+    metrics = evaluate_baseline(pipeline, texts, labels)
     assert 0.0 <= metrics["accuracy"] <= 1.0
     assert len(metrics["confusion_matrix"]) == 2

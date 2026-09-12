@@ -13,6 +13,7 @@ import joblib
 import torch
 from torch.utils.data import DataLoader
 
+from baseline import evaluate_baseline
 from sentiment.artifacts import save_json, save_reliability_diagram
 from sentiment.config import ExperimentConfig
 from sentiment.data import IMDBDataset
@@ -51,8 +52,6 @@ def parse_args() -> argparse.Namespace:
 
 def evaluate_baseline_test(model_path: Path, test_frame) -> dict:
     """Đánh giá pipeline TF-IDF + Logistic Regression trên tập Test."""
-    from baseline import evaluate_baseline
-
     pipeline = joblib.load(model_path)
     metrics = evaluate_baseline(pipeline, test_frame["text"], test_frame["label"].astype(int))
     probabilities = pipeline.predict_proba(test_frame["text"])[:, 1]

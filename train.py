@@ -56,6 +56,24 @@ def parse_args() -> argparse.Namespace:
         help="Chiến lược cắt ngắn chuỗi ('first' hoặc 'head_tail', mặc định: head_tail)",
     )
     parser.add_argument(
+        "--max-length",
+        type=int,
+        default=256,
+        help="Độ dài chuỗi tối đa (mặc định: 256)",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Giới hạn số lượng mẫu để huấn luyện nhanh (mặc định: None)",
+    )
+    parser.add_argument(
+        "--min-frequency",
+        type=int,
+        default=3,
+        help="Tần suất tối thiểu của từ trong từ điển (mặc định: 3)",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -79,6 +97,8 @@ def main() -> None:
         calibration_size=0.1,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        max_length=args.max_length,
+        min_frequency=args.min_frequency,
         truncation_strategy=args.truncation_strategy,
         seed=args.seed,
     )
@@ -99,13 +119,14 @@ def main() -> None:
     print(f"-> Thiết bị tính toán  : {device}")
     print(f"-> Thư mục đầu ra      : {output_dir.resolve()}")
     print(f"-> Batch size / Epochs : {config.batch_size} / {config.epochs}")
+    print(f"-> Max length          : {config.max_length}")
     print(f"-> Truncation Strategy : {config.truncation_strategy}")
     print(f"-> Seed                : {config.seed}")
     print("-" * 65)
 
     # 1. Nạp dữ liệu và xây dựng Vocabulary
     print("1/4. Đang nạp dữ liệu và phân chia Train/Val/Calibration...")
-    data = create_data_bundle(train_path, config)
+    data = create_data_bundle(train_path, config, max_samples=args.max_samples)
     print(f"     -> Phân bổ mẫu    : {data.sizes}")
     print(f"     -> Từ điển Train  : {len(data.vocabulary):,} tokens")
     print(

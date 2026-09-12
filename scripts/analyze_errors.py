@@ -19,7 +19,6 @@ import pandas as pd
 
 from sentiment.data_validation import load_dataset
 from sentiment.inference import load_predictor
-from sentiment.text import tokenize
 from sentiment.utils import configure_utf8_output
 
 NEGATION_PATTERN = re.compile(
@@ -52,7 +51,7 @@ def analyze_errors_on_dataset(
     probs = [r.probability for r in results]
     confidences = [max(p, 1.0 - p) for p in probs]
     oov_rates = [r.oov_rate for r in results]
-    lengths = [len(tokenize(t)) for t in texts]
+    lengths = [r.token_count for r in results]
     is_errors = [p != y for p, y in zip(predictions, labels, strict=False)]
 
     records = pd.DataFrame(

@@ -149,9 +149,15 @@ def _make_loader(
     )
 
 
-def create_data_bundle(train_path: str | Path, config: ExperimentConfig) -> DataBundle:
+def create_data_bundle(
+    train_path: str | Path,
+    config: ExperimentConfig,
+    max_samples: int | None = None,
+) -> DataBundle:
     """Tạo DataBundle gồm train, validation, calibration và từ điển train-only."""
     source_train = load_dataset(train_path)
+    if max_samples is not None and max_samples > 0:
+        source_train = source_train.head(max_samples)
     train_frame, validation_frame, calibration_frame = split_development_frame(source_train, config)
 
     # Từ điển CHỈ được xây dựng từ tập Train

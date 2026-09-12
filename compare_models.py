@@ -9,12 +9,11 @@ Báo cáo so sánh gồm 4 chỉ số cốt lõi:
 
 import argparse
 import json
-import time
 from pathlib import Path
 
 import joblib
 
-from sentiment.inference import SentimentPredictor
+from sentiment.inference import load_predictor
 from sentiment.utils import configure_utf8_output, measure_latency
 
 
@@ -26,18 +25,13 @@ def get_baseline_stats(baseline_dir: Path) -> dict | None:
         return None
 
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    predictor = load_predictor(model_path)
     pipeline = joblib.load(model_path)
     clf = pipeline.named_steps["classifier"]
     param_count = int(clf.coef_.size + clf.intercept_.size)
 
-    sample = ["This movie has an outstanding storyline and wonderful performances!"]
-    for _ in range(5):
-        pipeline.predict_proba(sample)
-    start = time.perf_counter()
-    runs = 30
-    for _ in range(runs):
-        pipeline.predict_proba(sample)
-    latency_ms = (time.perf_counter() - start) / runs * 1000
+    sample = "This movie has an outstanding storyline and wonderful performances!"
+    latency_ms = measure_latency(predictor, sample, runs=30)
 
     return {
         "model": "TF-IDF + Logistic Regression",
@@ -58,7 +52,7 @@ def get_bilstm_stats(bilstm_dir: Path) -> dict | None:
         return None
 
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-    predictor = SentimentPredictor(model_path, device="cpu")
+    predictor = load_predictor(model_path, device="cpu")
     param_count = predictor.model.count_parameters()
 
     sample = "This movie has an outstanding storyline and wonderful performances!"

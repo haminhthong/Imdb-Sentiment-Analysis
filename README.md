@@ -5,7 +5,6 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688.svg)](https://fastapi.tiangolo.com/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.38%2B-FF4B4B.svg)](https://streamlit.io/)
 [![CI](https://github.com/haminhthong/Imdb-Sentiment-Analysis/actions/workflows/quality.yml/badge.svg)](https://github.com/haminhthong/Imdb-Sentiment-Analysis/actions/workflows/quality.yml)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 
 Dự án phân loại cảm xúc đánh giá phim (IMDB Sentiment Analysis) được thiết kế theo tư duy Machine Learning thực chất:
 - **Baseline mạnh:** TF-IDF + Logistic Regression với tính giải thích qua các n-gram quan trọng.
@@ -223,13 +222,6 @@ curl -X POST "http://localhost:8000/predict" \
 Khởi động giao diện tương tác:
 ```bash
 streamlit run app.py
-```
-
-### Docker
-Xây dựng và chạy container:
-```bash
-docker build -t cinesentiment:latest .
-docker run -p 8000:8000 cinesentiment:latest
 ```
 
 ---

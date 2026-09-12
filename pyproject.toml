@@ -28,6 +28,7 @@ cinesentiment-evaluate = "evaluate:main"
 cinesentiment-compare = "compare_models:main"
 cinesentiment-predict = "predict:main"
 cinesentiment-api = "api:run"
+cinesentiment-analyze-errors = "scripts.analyze_errors:main"
 
 [build-system]
 requires = ["setuptools>=68"]

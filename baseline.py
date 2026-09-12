@@ -95,9 +95,6 @@ def evaluate_baseline(pipeline: Pipeline, texts, labels) -> dict:
     }
 
 
-evaluate = evaluate_baseline
-
-
 def extract_top_features(
     pipeline: Pipeline, top_k: int = 15
 ) -> dict[str, list[dict[str, float | str]]]:
