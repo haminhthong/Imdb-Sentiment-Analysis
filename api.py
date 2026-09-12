@@ -96,14 +96,7 @@ def predict_sentiment(request: PredictionRequest) -> PredictionResponse:
 
     try:
         res = predictor.predict(request.text)
-        return PredictionResponse(
-            label=res.label,
-            probability=res.probability,
-            truncated=res.truncated,
-            oov_rate=res.oov_rate,
-            token_count=res.token_count,
-            warnings=res.warnings,
-        )
+        return PredictionResponse(**res.to_dict())
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -124,17 +117,7 @@ def predict_sentiment_batch(request: BatchPredictionRequest) -> list[PredictionR
 
     try:
         results = predictor.predict_batch(request.texts)
-        return [
-            PredictionResponse(
-                label=r.label,
-                probability=r.probability,
-                truncated=r.truncated,
-                oov_rate=r.oov_rate,
-                token_count=r.token_count,
-                warnings=r.warnings,
-            )
-            for r in results
-        ]
+        return [PredictionResponse(**r.to_dict()) for r in results]
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
